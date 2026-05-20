@@ -1,0 +1,136 @@
+{
+  "case_id": "RDII-2026-TC04",
+  "submission_timestamp": "2026-05-17T13:45:00Z",
+  "organization": {
+    "legal_name": "Cascadia Defence Systems Inc.",
+    "operating_name": "Cascadia DS",
+    "cra_business_number": "123456789",
+    "incorporation_date": "2018-03-15",
+    "jurisdiction_of_incorporation": "British Columbia",
+    "incorporation_number": "BC1234567",
+    "date_established_in_canada": "2018-03-15",
+    "mailing_address": {
+      "street": "Suite 400, 1090 West Georgia Street",
+      "city": "Vancouver",
+      "province": "BC",
+      "postal_code": "V6E 3V7",
+      "country": "Canada"
+    },
+    "telephone": "+16041234567",
+    "email": "info@cascadiads.ca",
+    "website": "https://www.cascadiads.ca",
+    "indigenous_organization": false,
+    "corporate_status": "for-profit",
+    "organization_type": "Corporation",
+    "fte_employees": 22,
+    "org_description": "Cascadia Defence Systems Inc. develops advanced sensor integration systems for maritime and coastal defence applications. Established March 2018 in Vancouver, BC. Not a subsidiary.",
+    "is_subsidiary": false,
+    "bc_operating_facilities": true,
+    "fiscal_year_end": "12-31",
+    "revenue_most_recent_fy": 2400000,
+    "revenue_previous_fy": 1900000,
+    "previously_received_rda_funding": false
+  },
+  "project": {
+    "title": "Advanced Uncrewed Maritime Sensor Integration Platform",
+    "address": {
+      "street": "1090 West Georgia Street",
+      "city": "Vancouver",
+      "province": "BC",
+      "postal_code": "V6E 3V7"
+    },
+    "description": "Cascadia DS will develop and commercialize an integrated sensor fusion platform for uncrewed maritime vessels supporting Canadian coastal defence operations.",
+    "economic_benefits": "Project will create 4 HQP FTEs and 2 non-HQP FTEs. Revenue growth of $3.2M within 2 years post-commercialization.",
+    "rda_priority": "Defence",
+    "priority_support_explanation": "The platform contributes to Canadian maritime domain awareness capabilities.",
+    "technology_commercialization": true,
+    "start_date": "2026-05-01",
+    "end_date": "2027-12-31"
+  },
+  "funding": {
+    "total_project_costs": 1850000,
+    "total_rda_funding_requested": 1200000,
+    "total_non_rda_funding": 650000,
+    "cash_flows": [
+      {
+        "fiscal_year": "2026-27",
+        "total_expenditures": 1100000,
+        "rda_funding": 715000,
+        "non_rda_funding": 385000
+      },
+      {
+        "fiscal_year": "2027-28",
+        "total_expenditures": 750000,
+        "rda_funding": 485000,
+        "non_rda_funding": 265000
+      }
+    ],
+    "funding_partners": [
+      {
+        "name": "Cascadia Defence Systems Inc.",
+        "source": "Non-Government",
+        "confirmed": true,
+        "amount": 350000
+      },
+      {
+        "name": "BC Tech Fund",
+        "source": "Government, Provincial",
+        "confirmed": true,
+        "amount": 300000
+      }
+    ]
+  },
+  "project_costs": [
+    {
+      "description": "Sensor hardware and embedded systems",
+      "type": "Capital",
+      "amount": 420000
+    },
+    {
+      "description": "Salaries -- engineering and software development",
+      "type": "Non-capital",
+      "amount": 840000
+    },
+    {
+      "description": "Contractors & professional fees",
+      "type": "Non-capital",
+      "amount": 447000
+    },
+    {
+      "description": "Travel -- field testing",
+      "type": "Non-capital",
+      "amount": 73000
+    },
+    {
+      "description": "Other -- certification and regulatory",
+      "type": "Non-capital",
+      "amount": 70000
+    }
+  ],
+  "benefits": {
+    "revenue_growth": {
+      "target": 3200000,
+      "target_date": "2028-12-31"
+    },
+    "export_sales_growth": {
+      "target": 1500000,
+      "target_date": "2028-12-31"
+    },
+    "hqp_jobs_created": {
+      "target": 4,
+      "target_date": "2027-12-31"
+    },
+    "non_hqp_jobs_created": {
+      "target": 2,
+      "target_date": "2027-12-31"
+    },
+    "rd_expenditures": {
+      "target": 650000,
+      "target_date": "2027-12-31"
+    },
+    "technologies_to_market": {
+      "target": 1,
+      "target_date": "2028-06-30"
+    }
+  }
+}

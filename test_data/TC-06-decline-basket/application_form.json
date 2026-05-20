@@ -1,0 +1,126 @@
+{
+  "case_id": "RDII-2026-TC06",
+  "submission_timestamp": "2026-05-18T09:00:00Z",
+  "organization": {
+    "legal_name": "Northern Shield Technologies Ltd.",
+    "operating_name": "NST",
+    "cra_business_number": "987654321",
+    "incorporation_date": "2020-07-03",
+    "jurisdiction_of_incorporation": "British Columbia",
+    "incorporation_number": "BC9876543",
+    "date_established_in_canada": "2020-07-03",
+    "mailing_address": {
+      "street": "200-1285 West Broadway",
+      "city": "Vancouver",
+      "province": "BC",
+      "postal_code": "V6H 3X8",
+      "country": "Canada"
+    },
+    "telephone": "+16049876543",
+    "email": "info@nst.ca",
+    "website": "https://www.nst.ca",
+    "indigenous_organization": false,
+    "corporate_status": "for-profit",
+    "organization_type": "Corporation",
+    "fte_employees": 11,
+    "org_description": "Northern Shield Technologies Ltd. develops edge AI processing solutions for defence and public safety applications. Established July 2020 in Vancouver, BC. Not a subsidiary.",
+    "is_subsidiary": false,
+    "bc_operating_facilities": true,
+    "fiscal_year_end": "12-31",
+    "revenue_most_recent_fy": 1100000,
+    "revenue_previous_fy": 780000,
+    "previously_received_rda_funding": false
+  },
+  "project": {
+    "title": "Tactical Edge AI Processing Module for Allied Ground Forces",
+    "address": {
+      "street": "200-1285 West Broadway",
+      "city": "Vancouver",
+      "province": "BC",
+      "postal_code": "V6H 3X8"
+    },
+    "description": "Northern Shield will develop a hardened edge AI processing module for real-time tactical data fusion in contested environments for Allied ground forces.",
+    "economic_benefits": "2 HQP FTEs, 1 non-HQP FTE. Revenue growth of $1.8M. Export sales $900K.",
+    "rda_priority": "Defence",
+    "priority_support_explanation": "Tactical edge AI directly supports Allied ground forces operational capability.",
+    "technology_commercialization": true,
+    "start_date": "2026-06-01",
+    "end_date": "2027-09-30"
+  },
+  "funding": {
+    "total_project_costs": 950000,
+    "total_rda_funding_requested": 600000,
+    "total_non_rda_funding": 350000,
+    "cash_flows": [
+      {
+        "fiscal_year": "2026-27",
+        "total_expenditures": 600000,
+        "rda_funding": 380000,
+        "non_rda_funding": 220000
+      },
+      {
+        "fiscal_year": "2027-28",
+        "total_expenditures": 350000,
+        "rda_funding": 220000,
+        "non_rda_funding": 130000
+      }
+    ],
+    "funding_partners": [
+      {
+        "name": "Northern Shield Technologies Ltd.",
+        "source": "Non-Government",
+        "confirmed": true,
+        "amount": 350000
+      }
+    ]
+  },
+  "project_costs": [
+    {
+      "description": "Edge AI processing hardware",
+      "type": "Capital",
+      "amount": 180000
+    },
+    {
+      "description": "Salaries -- AI engineering team",
+      "type": "Non-capital",
+      "amount": 520000
+    },
+    {
+      "description": "Contractors -- embedded systems",
+      "type": "Non-capital",
+      "amount": 150000
+    },
+    {
+      "description": "Travel -- client engagement",
+      "type": "Non-capital",
+      "amount": 50000
+    },
+    {
+      "description": "Other -- certifications",
+      "type": "Non-capital",
+      "amount": 50000
+    }
+  ],
+  "benefits": {
+    "revenue_growth": {
+      "target": 1800000,
+      "target_date": "2028-09-30"
+    },
+    "export_sales_growth": {
+      "target": 900000,
+      "target_date": "2028-09-30"
+    },
+    "hqp_jobs_created": {
+      "target": 2,
+      "target_date": "2027-09-30"
+    },
+    "non_hqp_jobs_created": {
+      "target": 1,
+      "target_date": "2027-09-30"
+    },
+    "technologies_to_market": {
+      "target": 1,
+      "target_date": "2028-03-31"
+    }
+  }
+}
