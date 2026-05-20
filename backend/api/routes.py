@@ -32,8 +32,8 @@ from comms import email_draft as email_draft_module
 from comms import manager_queue as mq_module
 from intake import trigger, ingestion, classifier, extractor, rules_engine, router as case_router
 
-TEST_DATA_DIR = Path("/Users/rahulpyne/pacifican/rdii-prototype/test_data")
-UPLOAD_DIR = Path("/Users/rahulpyne/pacifican/rdii-prototype/store/uploads")
+TEST_DATA_DIR = Path(os.environ.get("TEST_DATA_DIR", str(Path(__file__).parent.parent.parent / "test_data")))
+UPLOAD_DIR = Path(os.environ.get("UPLOAD_DIR", "/tmp/rdii-uploads"))
 
 _TEST_SCENARIOS: Dict[str, str] = {
     "TC-01-complete-tech": "Complete technology commercialization application — all 8 required documents",

@@ -17,9 +17,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from api.routes import router
 from store import case_store as _cs
 
-# Ensure storage directories exist on startup
-STORE_DIR = Path(__file__).parent.parent / "store"
-STORE_DIR.mkdir(exist_ok=True)
+# Ensure storage directories exist on startup.
+# On Vercel the filesystem is read-only except /tmp, so default STORE_DIR there.
+import os as _os
+_default_store = "/tmp/rdii-store" if _os.environ.get("VERCEL") else str(Path(__file__).parent.parent / "store")
+STORE_DIR = Path(_os.environ.get("STORE_DIR", _default_store))
+STORE_DIR.mkdir(parents=True, exist_ok=True)
 (STORE_DIR / "cases").mkdir(exist_ok=True)
 manager_queue_file = STORE_DIR / "manager_queue.json"
 if not manager_queue_file.exists():
@@ -33,7 +36,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

@@ -13,7 +13,8 @@ from typing import Dict, List
 
 from models.schemas import AuditEvent, Case, EventType
 
-STORE_ROOT = Path("/Users/rahulpyne/pacifican/rdii-prototype/store")
+import os as _os
+STORE_ROOT = Path(_os.environ.get("STORE_DIR", str(Path(__file__).parent.parent.parent / "store")))
 QUEUE_FILE = STORE_ROOT / "manager_queue.json"
 
 

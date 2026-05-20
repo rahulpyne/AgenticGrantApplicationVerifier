@@ -12,6 +12,7 @@ build/
 # Case store (runtime data)
 store/cases/*.json
 store/manager_queue.json
+store/uploads/
 
 # Node
 node_modules/

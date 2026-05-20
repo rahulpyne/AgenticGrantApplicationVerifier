@@ -14,7 +14,8 @@ from models.schemas import Case
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
-STORE_ROOT = Path("/Users/rahulpyne/pacifican/rdii-prototype/store")
+import os as _os
+STORE_ROOT = Path(_os.environ.get("STORE_DIR", str(Path(__file__).parent.parent.parent / "store")))
 CASES_DIR = STORE_ROOT / "cases"
 MANAGER_QUEUE_FILE = STORE_ROOT / "manager_queue.json"
 
