@@ -3,12 +3,18 @@ FastAPI routes for the RDII Intake Triage System.
 """
 from __future__ import annotations
 
+import io
+import json
 import os
+import shutil
+import uuid
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Body, HTTPException
+from fastapi import APIRouter, Body, File, Form, HTTPException, UploadFile
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from models.schemas import (
@@ -27,6 +33,22 @@ from comms import manager_queue as mq_module
 from intake import trigger, ingestion, classifier, extractor, rules_engine, router as case_router
 
 TEST_DATA_DIR = Path("/Users/rahulpyne/pacifican/rdii-prototype/test_data")
+UPLOAD_DIR = Path("/Users/rahulpyne/pacifican/rdii-prototype/store/uploads")
+
+_TEST_SCENARIOS: Dict[str, str] = {
+    "TC-01-complete-tech": "Complete technology commercialization application — all 8 required documents",
+    "TC-02-complete-nontech": "Complete non-tech application — 7 documents (no tech questionnaire required)",
+    "TC-03-incomplete-one-missing": "1 missing document (funding confirmation letter)",
+    "TC-04-incomplete-two-missing": "2 missing documents (interim financials + supplemental form)",
+    "TC-05-incomplete-missing-techq": "Tech project missing its technology questionnaire",
+    "TC-06-decline-basket": "5+ missing documents — triggers decline basket routing",
+    "TC-07-name-mismatch": "Legal name mismatch across application form, supplemental form, and budget",
+    "TC-08-budget-mismatch": "Budget total in application form differs from worksheet total",
+    "TC-09-date-out-of-window": "Project period falls outside the Apr 2026 – Mar 2028 eligible window",
+    "TC-10-weak-funding-proof": "Funding confirmation letter is missing a forecast year",
+    "TC-11-low-confidence": "Key fields extracted with low confidence — manual review required",
+    "TC-12-duplicate-uploads": "Duplicate files uploaded, causing a document category to remain unmatched",
+}
 
 router = APIRouter()
 
@@ -455,3 +477,117 @@ def get_audit_trail(case_id: str) -> List[AuditEvent]:
 def get_manager_queue() -> List[Dict[str, Any]]:
     """List of decline basket cases awaiting manager confirmation."""
     return mq_module.get_manager_queue()
+
+
+# ---------------------------------------------------------------------------
+# Applicant submission portal
+# ---------------------------------------------------------------------------
+
+def _basket_message(case: Case) -> str:
+    if case.basket == Basket.complete:
+        return "Your application package is complete. Our team will review it and be in touch."
+    if case.basket == Basket.incomplete:
+        return (
+            f"Your application is missing {case.missing_count} required document(s). "
+            "You will receive an email requesting the outstanding materials."
+        )
+    return "Your application has been received and is under review by our team."
+
+
+@router.post("/apply")
+async def submit_application(
+    applicant_name: str = Form(...),
+    cra_business_number: str = Form(default=""),
+    incorporation_date: str = Form(default=""),
+    province: str = Form(default="BC"),
+    pacifican_facility: bool = Form(default=True),
+    project_type: str = Form(default="non_tech"),
+    requested_amount: float = Form(default=0.0),
+    marketing_amount: float = Form(default=0.0),
+    project_start: str = Form(default=""),
+    project_end: str = Form(default=""),
+    files: List[UploadFile] = File(default=[]),
+) -> Dict[str, Any]:
+    """
+    Applicant file upload endpoint. Accepts multipart form data with
+    documents + applicant info fields. Runs the full intake pipeline
+    and returns a case ID.
+    """
+    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    submission_dir = UPLOAD_DIR / uuid.uuid4().hex[:8].upper()
+    submission_dir.mkdir(parents=True)
+
+    has_app_form = False
+    for uf in files:
+        filename = Path(uf.filename).name if uf.filename else "unnamed"
+        dest = submission_dir / filename
+        with dest.open("wb") as fh:
+            shutil.copyfileobj(uf.file, fh)
+        if filename == "application_form.json":
+            has_app_form = True
+
+    if not has_app_form:
+        app_form: Dict[str, Any] = {
+            "legal_name": applicant_name,
+            "cra_business_number": cra_business_number,
+            "incorporation_date": incorporation_date,
+            "province": province,
+            "pacifican_facility": pacifican_facility,
+            "project_type": project_type,
+            "requested_pacifican_amount": requested_amount,
+            "marketing_non_pacifican_funding": marketing_amount,
+            "project_period_start": project_start,
+            "project_period_end": project_end,
+        }
+        with (submission_dir / "application_form.json").open("w") as fh:
+            json.dump(app_form, fh, indent=2)
+
+    try:
+        case = _run_full_pipeline(str(submission_dir))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    return {
+        "case_id": case.case_id,
+        "basket": case.basket.value if case.basket else None,
+        "status": case.status,
+        "missing_count": case.missing_count,
+        "message": _basket_message(case),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Test packages
+# ---------------------------------------------------------------------------
+
+@router.get("/test-packages")
+def list_test_packages() -> List[Dict[str, str]]:
+    """List available test scenario packages for download."""
+    return [
+        {"name": name, "description": desc}
+        for name, desc in _TEST_SCENARIOS.items()
+    ]
+
+
+@router.get("/test-packages/{name}/download")
+def download_test_package(name: str) -> StreamingResponse:
+    """Download a test scenario as a ZIP archive."""
+    if name not in _TEST_SCENARIOS:
+        raise HTTPException(status_code=404, detail=f"Test package {name!r} not found")
+
+    folder = TEST_DATA_DIR / name
+    if not folder.exists():
+        raise HTTPException(status_code=404, detail=f"Test data not found for {name!r}")
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for f in sorted(folder.iterdir()):
+            if f.is_file():
+                zf.write(f, f.name)
+    buf.seek(0)
+
+    return StreamingResponse(
+        buf,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{name}.zip"'},
+    )

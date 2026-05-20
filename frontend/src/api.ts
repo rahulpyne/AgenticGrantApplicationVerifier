@@ -115,3 +115,27 @@ export const recordManagerDecision = (
     comment,
     manager_id: "manager-1",
   }).then((r) => r.data);
+
+export interface SubmitResult {
+  case_id: string;
+  basket: "complete" | "incomplete" | "decline_basket" | null;
+  status: string;
+  missing_count: number;
+  message: string;
+}
+
+export interface TestPackage {
+  name: string;
+  description: string;
+}
+
+export const submitApplication = (formData: FormData) =>
+  api.post<SubmitResult>("/apply", formData, {
+    headers: { "Content-Type": "multipart/form-data" },
+  }).then((r) => r.data);
+
+export const getTestPackages = () =>
+  api.get<TestPackage[]>("/test-packages").then((r) => r.data);
+
+export const testPackageDownloadUrl = (name: string) =>
+  `/api/v1/test-packages/${name}/download`;
