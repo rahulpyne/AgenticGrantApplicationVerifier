@@ -116,21 +116,14 @@ export const recordManagerDecision = (
     manager_id: "manager-1",
   }).then((r) => r.data);
 
-export interface SubmitResult {
-  case_id: string;
-  basket: "complete" | "incomplete" | "decline_basket" | null;
-  status: string;
-  missing_count: number;
-  message: string;
-}
-
 export interface TestPackage {
   name: string;
   description: string;
 }
 
+// /apply now returns the full Case object — no second getCase() call needed.
 export const submitApplication = (formData: FormData) =>
-  api.post<SubmitResult>("/apply", formData, {
+  api.post<Case>("/apply", formData, {
     headers: { "Content-Type": "multipart/form-data" },
   }).then((r) => r.data);
 

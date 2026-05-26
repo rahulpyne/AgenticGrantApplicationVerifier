@@ -575,13 +575,16 @@ async def submit_application(
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 
-    return {
-        "case_id": case.case_id,
-        "basket": case.basket.value if case.basket else None,
-        "status": case.status,
-        "missing_count": case.missing_count,
-        "message": _basket_message(case),
-    }
+    # Return the full case object so the frontend has everything it needs
+    # for the chain-of-thought trace in a single request — avoids a second
+    # getCase() call that would fail on Vercel (different Lambda, empty /tmp).
+    #
+    # Use json.loads(model_dump_json()) rather than model_dump(mode="json"):
+    # Pydantic v2 has a known quirk where Optional[Any] fields (like
+    # ExtractedField.value) can serialise to None in mode="json" for complex
+    # Python objects.  model_dump_json() is the same codepath used by
+    # save_case() and is confirmed to produce correct output.
+    return json.loads(case.model_dump_json())
 
 
 # ---------------------------------------------------------------------------

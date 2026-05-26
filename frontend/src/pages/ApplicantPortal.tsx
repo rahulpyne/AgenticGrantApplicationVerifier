@@ -6,7 +6,7 @@ import {
   submitApplication,
   testPackageDownloadUrl,
 } from "../api";
-import type { Case, SubmitResult, TestPackage } from "../api";
+import type { Case, TestPackage } from "../api";
 import ChainOfThought from "./ChainOfThought";
 
 const REQUIRED_DOCS = [
@@ -52,7 +52,7 @@ function fmt(bytes: number) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function BasketBadge({ basket }: { basket: SubmitResult["basket"] }) {
+function BasketBadge({ basket }: { basket: Case["basket"] }) {
   if (basket === "complete")
     return <span className="chip chip-complete">Complete</span>;
   if (basket === "incomplete")
@@ -103,32 +103,20 @@ export default function ApplicantPortal() {
   const [dragging, setDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Submission
+  // Submission — stores the full Case returned by /apply
   const [submitting, setSubmitting] = useState(false);
-  const [result, setResult] = useState<SubmitResult | null>(null);
-  const [caseDetail, setCaseDetail] = useState<Case | null>(null);
+  const [submittedCase, setSubmittedCase] = useState<Case | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   // Test packages
   const [packages, setPackages] = useState<TestPackage[]>([]);
 
-  // ?preview=CASE_ID → auto-load chain-of-thought for that case
+  // ?preview=CASE_ID → load an existing case for chain-of-thought inspection
   const [searchParams] = useSearchParams();
   useEffect(() => {
     const previewId = searchParams.get("preview");
-    if (previewId && !result) {
-      getCase(previewId)
-        .then((c) => {
-          setResult({
-            case_id: c.case_id,
-            basket: c.basket,
-            status: c.status,
-            missing_count: c.missing_count,
-            message: "Application trace loaded.",
-          });
-          setCaseDetail(c);
-        })
-        .catch(() => {});
+    if (previewId && !submittedCase) {
+      getCase(previewId).then(setSubmittedCase).catch(() => {});
     }
   }, [searchParams]); // eslint-disable-line
 
@@ -193,10 +181,9 @@ export default function ApplicantPortal() {
     files.forEach((f) => fd.append("files", f));
 
     try {
-      const res = await submitApplication(fd);
-      setResult(res);
-      // Fetch full case for chain-of-thought trace
-      getCase(res.case_id).then(setCaseDetail).catch(() => {});
+      // /apply returns the full Case — no second getCase() needed
+      const fullCase = await submitApplication(fd);
+      setSubmittedCase(fullCase);
     } catch (e: unknown) {
       const msg =
         (e as { response?: { data?: { detail?: string } } })?.response?.data
@@ -207,67 +194,58 @@ export default function ApplicantPortal() {
     }
   };
 
-  if (result) {
+  if (submittedCase) {
+    const isPreview = !!searchParams.get("preview");
     return (
       <div style={{ maxWidth: 900, margin: "0 auto" }}>
         {/* Result summary card */}
         <div className="card">
           <div className="card-header" style={{ background: "#F0FDF4", color: "#15803D", fontSize: 15 }}>
-            ✓ Application Submitted Successfully
+            {isPreview ? "🔍 Application Trace Preview" : "✓ Application Submitted Successfully"}
           </div>
           <div className="card-body">
             <div style={{ display: "flex", gap: 32, flexWrap: "wrap", alignItems: "flex-start" }}>
               <div>
-                <div className="text-muted text-sm" style={{ marginBottom: 4 }}>Your Application ID</div>
+                <div className="text-muted text-sm" style={{ marginBottom: 4 }}>Application ID</div>
                 <div style={{ fontFamily: "monospace", fontSize: 22, fontWeight: 700, color: "var(--primary)", letterSpacing: 1 }}>
-                  {result.case_id}
+                  {submittedCase.case_id}
                 </div>
-                <div className="text-sm text-muted" style={{ marginTop: 4 }}>
-                  Keep this ID for records and any follow-up correspondence.
-                </div>
+                {!isPreview && (
+                  <div className="text-sm text-muted" style={{ marginTop: 4 }}>
+                    Keep this ID for records and any follow-up correspondence.
+                  </div>
+                )}
               </div>
               <div>
-                <div className="text-muted text-sm" style={{ marginBottom: 6 }}>Initial Assessment</div>
-                <BasketBadge basket={result.basket} />
+                <div className="text-muted text-sm" style={{ marginBottom: 6 }}>Assessment</div>
+                <BasketBadge basket={submittedCase.basket} />
               </div>
             </div>
 
-            <div className="alert alert-info" style={{ marginTop: 16, marginBottom: 0 }}>
-              {result.message}
-            </div>
-
-            {result.missing_count > 0 && (
-              <div className="alert alert-warning" style={{ marginTop: 12, marginBottom: 0 }}>
+            {submittedCase.missing_count > 0 && (
+              <div className="alert alert-warning" style={{ marginTop: 16, marginBottom: 0 }}>
                 <span>⚠</span>
                 <span>
-                  <strong>{result.missing_count} document(s)</strong> could not be matched.
-                  You will receive an email listing the outstanding items.
+                  <strong>{submittedCase.missing_count} document(s)</strong> could not be matched.
+                  {!isPreview && " You will receive an email listing the outstanding items."}
                 </span>
               </div>
             )}
           </div>
         </div>
 
-        {/* Chain of thought — shown once full case data is loaded */}
-        {caseDetail ? (
-          <div className="card">
-            <div className="card-body">
-              <ChainOfThought c={caseDetail} />
-            </div>
+        {/* Chain of thought — data comes directly from /apply response, no second request */}
+        <div className="card">
+          <div className="card-body">
+            <ChainOfThought c={submittedCase} />
           </div>
-        ) : (
-          <div className="card">
-            <div className="card-body text-muted" style={{ textAlign: "center", padding: 32 }}>
-              🧠 Loading decision trace…
-            </div>
-          </div>
-        )}
+        </div>
 
         <div style={{ marginBottom: 40, marginTop: 8 }}>
           <button
             className="btn-secondary"
             onClick={() => {
-              setResult(null); setCaseDetail(null); setFiles([]);
+              setSubmittedCase(null); setFiles([]);
               setApplicantName(""); setCraNumber(""); setIncorporationDate("");
               setRequestedAmount(""); setMatchingAmount(""); setProjectStart(""); setProjectEnd("");
               setTouched({});
