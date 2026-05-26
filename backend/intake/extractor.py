@@ -294,6 +294,161 @@ def _extract_legal_name_from_budget(filepath: str) -> Optional[str]:
 
 
 # ---------------------------------------------------------------------------
+# PDF header name extraction (DOC-02, DOC-03, DOC-05, DOC-06)
+# ---------------------------------------------------------------------------
+
+def _extract_org_name_from_pdf_header(filepath: str) -> Optional[str]:
+    """
+    Extract the organisation name from a financial statement, business plan,
+    or funding confirmation letter.  In these document types the legal name
+    is typically the very first non-trivial line of text (e.g. the heading
+    "CASCADIA DEFENCE SYSTEMS INC." that appears before the document title).
+    Falls back to searching the full text for an ALL-CAPS or Title-Case
+    line that looks like a company name.
+    """
+    text = _read_pdf_text(filepath)
+    if not text:
+        return None
+
+    skip_patterns = re.compile(
+        r"^(for\b|page\b|date\b|prepared|the period|letter|financial|statement|"
+        r"interim|annual|business plan|bc tech|award|inc\.|ltd\.|\d)",
+        re.IGNORECASE,
+    )
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or len(line) < 5 or len(line) > 120:
+            continue
+        if skip_patterns.match(line):
+            continue
+        # Prefer lines that look like company names (contain "Inc.", "Ltd.", "Corp.",
+        # "Systems", "Defence", etc. OR are written in ALL CAPS).
+        looks_like_name = (
+            re.search(r"\b(inc|ltd|corp|limited|systems|defence|defense|technologies|solutions)\b",
+                      line, re.IGNORECASE)
+            or line == line.upper()
+        )
+        if looks_like_name:
+            return line
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Budget worksheet total reader (shared between extractor and rules engine)
+# ---------------------------------------------------------------------------
+
+def _read_budget_total(filepath: str) -> Optional[float]:
+    """
+    Return the Total Project Costs from the Cost Detail sheet.
+    Tries 'Total Project Costs (Current)' first, then '(Application)'.
+    """
+    try:
+        import openpyxl
+        wb = openpyxl.load_workbook(filepath, data_only=True)
+        sheet = None
+        for sname in wb.sheetnames:
+            if "cost detail" in sname.lower():
+                sheet = wb[sname]
+                break
+        if sheet is None and wb.sheetnames:
+            sheet = wb.active
+        if sheet is None:
+            return None
+        current: Optional[float] = None
+        application: Optional[float] = None
+        for row in sheet.iter_rows():
+            label = ""
+            for cell in row:
+                if cell.value and isinstance(cell.value, str):
+                    label = cell.value.strip().lower()
+                    break
+            if "total project costs (current)" in label:
+                for cell in reversed(row):
+                    if isinstance(cell.value, (int, float)):
+                        current = float(cell.value)
+                        break
+            elif "total project costs (application)" in label:
+                for cell in reversed(row):
+                    if isinstance(cell.value, (int, float)):
+                        application = float(cell.value)
+                        break
+        return current or application
+    except Exception:
+        return None
+
+
+# ---------------------------------------------------------------------------
+# DF-05 cross-check: requested amount vs budget worksheet total
+# ---------------------------------------------------------------------------
+
+def _cross_check_df05(
+    extracted: Dict[str, ExtractedField],
+    case: Case,
+    scenario_folder: str,
+) -> Dict[str, ExtractedField]:
+    """
+    Compare the declared PacifiCan requested amount (DF-05) against the
+    Total Project Costs in the budget worksheet (DOC-04).
+
+    The requested PacifiCan contribution must be ≤ total project costs.
+    If the declared amount exceeds the budget total the confidence drops
+    and a BUDGET MISMATCH note is added to raw_excerpt.
+    """
+    df05 = extracted.get("DF-05")
+    if not (df05 and df05.value is not None and df05.source_doc_id == "DOC-01"):
+        return extracted
+
+    requested = None
+    raw_val = df05.value
+    if isinstance(raw_val, (int, float)):
+        requested = float(raw_val)
+    elif isinstance(raw_val, dict):
+        amt = raw_val.get("amount") or raw_val.get("value")
+        if isinstance(amt, (int, float)):
+            requested = float(amt)
+
+    if requested is None:
+        return extracted
+
+    budget_path = _get_doc_path(case, "DOC-04", scenario_folder)
+    if not budget_path:
+        base = df05.raw_excerpt or f"funding.total_rda_funding_requested = {requested!r}"
+        extracted["DF-05"] = df05.model_copy(update={
+            "raw_excerpt": base + " | ℹ form declaration only — DOC-04 not submitted; budget cross-check not possible",
+        })
+        return extracted
+
+    budget_total = _read_budget_total(budget_path)
+    base = df05.raw_excerpt or f"funding.total_rda_funding_requested = {requested!r}"
+
+    if budget_total is None:
+        extracted["DF-05"] = df05.model_copy(update={
+            "raw_excerpt": base + " | ℹ DOC-04 present but total project costs row could not be read",
+        })
+        return extracted
+
+    if requested > budget_total:
+        new_conf = round(df05.confidence * 0.45, 2)
+        note = (
+            f"⚠ BUDGET MISMATCH — declared request ${requested:,.0f} exceeds "
+            f"budget worksheet total ${budget_total:,.0f}"
+        )
+    else:
+        new_conf = df05.confidence
+        pct = requested / budget_total * 100 if budget_total > 0 else 0.0
+        note = (
+            f"✓ budget cross-check: ${requested:,.0f} = {pct:.1f}% of "
+            f"worksheet total ${budget_total:,.0f}"
+        )
+
+    extracted["DF-05"] = df05.model_copy(update={
+        "confidence": new_conf,
+        "raw_excerpt": base + " | " + note,
+    })
+    return extracted
+
+
+# ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
 
@@ -365,6 +520,30 @@ def _cross_check_df01(
                 contradictions.append(f"DOC-04 says '{budget_name}'")
         else:
             parse_failures.append("DOC-04 (applicant row not found in budget worksheet)")
+
+    # ── Additional PDFs: financial statements, business plan, funding letter ──
+    # These documents reliably carry the legal name in their header.
+    # We extract the first organisation-name-looking line and compare.
+    PDF_SOURCES: List[Tuple[str, str]] = [
+        ("DOC-02", "annual financial statements"),
+        ("DOC-03", "interim financial statements"),
+        ("DOC-05", "business plan"),
+        ("DOC-06", "funding confirmation letter"),
+    ]
+    for doc_type, doc_label in PDF_SOURCES:
+        pdf_path = _get_doc_path(case, doc_type, scenario_folder)
+        if not pdf_path:
+            continue
+        checked_docs.append(doc_type)
+        detected = _extract_org_name_from_pdf_header(pdf_path)
+        if detected:
+            if _names_match(app_name, detected):
+                corroborations.append(f"{doc_type} ({doc_label}) confirms '{detected}'")
+            else:
+                contradictions.append(f"{doc_type} ({doc_label}) says '{detected}'")
+        else:
+            # Could not parse a name from this PDF — note it but don't penalise
+            parse_failures.append(f"{doc_type} ({doc_label}) — name not parseable from PDF")
 
     # ── Build updated excerpt and confidence ───────────────────────────────────
     base_excerpt = df01.raw_excerpt or f"organization.legal_name = {app_name!r}"
@@ -444,6 +623,7 @@ def extract_fields(case: Case, scenario_folder: str) -> Case:
     # ---- Cross-check form-declared values against uploaded documents ----------
     # Always runs when a form is present; updates confidence + raw_excerpt.
     extracted = _cross_check_df01(extracted, case, scenario_folder)
+    extracted = _cross_check_df05(extracted, case, scenario_folder)
 
     # ---- Fill missing fields with empty placeholders --------------------------
     ALL_FIELDS = {
@@ -478,7 +658,7 @@ def extract_fields(case: Case, scenario_folder: str) -> Case:
             "fields_missing":   [fid for fid, f in extracted.items() if f.value is None],
             "cross_check_mismatches": [
                 fid for fid, f in extracted.items()
-                if f.raw_excerpt and "CROSS-CHECK MISMATCH" in (f.raw_excerpt or "")
+                if f.raw_excerpt and ("CROSS-CHECK MISMATCH" in f.raw_excerpt or "BUDGET MISMATCH" in f.raw_excerpt)
             ],
         },
     )

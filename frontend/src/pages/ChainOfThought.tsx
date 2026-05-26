@@ -110,13 +110,15 @@ function extractConfidenceReason(field: ExtractedField): string {
 
   // Cross-check mismatch is the most important signal — explain it first.
   if (raw_excerpt?.includes("CROSS-CHECK MISMATCH"))
-    return `Cross-check FAILED — the value declared in the application form was NOT found in the uploaded documents. Confidence dropped from ~97% to ${Math.round(confidence * 100)}% to trigger mandatory officer review (R-009). Do not accept this value without manual verification.`;
-  if (raw_excerpt?.includes("✓ cross-checked"))
+    return `Cross-check FAILED — the name declared in the application form does not match the name found in the uploaded documents. Confidence dropped from ~97% to ${Math.round(confidence * 100)}% to trigger mandatory officer review (R-009). Do not accept this value without manual verification.`;
+  if (raw_excerpt?.includes("BUDGET MISMATCH"))
+    return `Budget cross-check FAILED — the declared PacifiCan request exceeds the Total Project Costs in the budget worksheet. Confidence dropped to ${Math.round(confidence * 100)}% — R-009 manual review triggered.`;
+  if (raw_excerpt?.includes("✓ cross-checked") || raw_excerpt?.includes("✓ budget cross-check"))
     return "Declared in application form AND independently confirmed by matching text in the uploaded documents — highest reliability.";
   if (raw_excerpt?.includes("form declaration only"))
-    return "Declared in application form only — DOC-07 and DOC-04 were not submitted so cross-document verification was not possible.";
+    return "Declared in application form only — supporting documents were not submitted so cross-document verification was not possible.";
   if (raw_excerpt?.includes("could not be parsed"))
-    return "Supporting documents were submitted but the legal name line could not be parsed from them — officer should manually verify this value.";
+    return "Supporting documents were submitted but the relevant field could not be parsed from them — officer should manually verify this value.";
 
   if (confidence >= 0.97) {
     if (field_id === "DF-02")
@@ -533,8 +535,10 @@ function StepExtract({ fields }: { fields: Record<string, ExtractedField> }) {
   return (
     <div style={{ padding: "4px 16px 16px" }}>
       <div style={{ fontSize: 12, color: "#6B7280", marginBottom: 10, padding: "6px 0", borderBottom: "1px solid #F3F4F6" }}>
-        Structured fields are extracted primarily from <strong>DOC-01 (application_form.json)</strong>, cross-checked against DOC-04 and DOC-07 where available.
-        Values with confidence &lt; 60% are flagged for manual review (Rule R-009).
+        Fields are declared in <strong>DOC-01 (application_form.json)</strong> and then cross-verified against all uploaded documents:
+        legal name (DF-01) is checked in DOC-02, DOC-03, DOC-04, DOC-05, DOC-06, DOC-07;
+        requested amount (DF-05) is checked against the DOC-04 budget total.
+        A <span style={{ color: "#B91C1C", fontWeight: 700 }}>⚠ MISMATCH</span> drops confidence below 60% and triggers R-009 mandatory review.
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
         {sorted.map((field) => {
