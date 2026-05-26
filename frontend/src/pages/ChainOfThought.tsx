@@ -77,9 +77,10 @@ function severityColor(s: string) {
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
-function ConfBar({ value, width = 200 }: { value: number; width?: number }) {
+function ConfBar({ value }: { value: number }) {
+  const label = confLabel(value);
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 8, flex: 1 }}>
+    <div style={{ display: "flex", alignItems: "center", gap: 8, flex: 1 }} title={`Confidence: ${label}`}>
       <div style={{ flex: 1, height: 7, background: "#E5E7EB", borderRadius: 4, overflow: "hidden" }}>
         <div
           style={{
@@ -399,8 +400,6 @@ function StepExtract({ fields }: { fields: Record<string, ExtractedField> }) {
 // ─── Step 5: Rules Evaluation ─────────────────────────────────────────────────
 
 function StepRules({ findings }: { findings: Finding[] }) {
-  const firedIds = new Set(findings.map((f) => f.rule_id));
-
   return (
     <div style={{ padding: "4px 16px 16px", display: "flex", flexDirection: "column", gap: 6 }}>
       {ALL_RULE_IDS.map((ruleId) => {
@@ -502,7 +501,6 @@ function StepDecision({ basket, missingCount, missingCategories, findings }: {
   const warnings = findings.filter((f) => ["warning", "error"].includes(f.severity));
   const isComplete = basket === "complete";
   const isIncomplete = basket === "incomplete";
-  const isDecline = basket === "decline_basket";
 
   const colors = isComplete
     ? { bg: "#F0FDF4", border: "#16A34A", text: "#15803D", chipBg: "#DCFCE7" }
