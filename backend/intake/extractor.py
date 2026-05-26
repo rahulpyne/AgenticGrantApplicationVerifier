@@ -297,6 +297,107 @@ def _extract_legal_name_from_budget(filepath: str) -> Optional[str]:
 # Main entry point
 # ---------------------------------------------------------------------------
 
+def _normalise_name(name: str) -> str:
+    """Lowercase, strip punctuation, collapse whitespace for name comparison."""
+    name = name.lower()
+    name = re.sub(r"[^\w\s]", "", name)
+    return re.sub(r"\s+", " ", name).strip()
+
+
+def _names_match(a: str, b: str) -> bool:
+    return bool(a) and bool(b) and _normalise_name(a) == _normalise_name(b)
+
+
+def _cross_check_df01(
+    extracted: Dict[str, ExtractedField],
+    case: Case,
+    scenario_folder: str,
+) -> Dict[str, ExtractedField]:
+    """
+    Cross-validate DF-01 (Legal Name) against uploaded documents.
+
+    When the value was declared in the application form (DOC-01) we must
+    verify it against DOC-07 (supplemental PDF) and DOC-04 (budget worksheet)
+    if those documents were submitted.
+
+    Outcomes:
+    - Doc confirms name  → corroboration note added to raw_excerpt; confidence kept
+    - Doc contradicts    → excerpt shows the mismatch; confidence drops to 0.40
+                           (below R-009 threshold of 0.60 → triggers manual-review)
+    - Doc present, name  → manual-review note; confidence unchanged
+      could not be parsed
+    - No cross-docs at   → "form declaration only" note; confidence unchanged
+      all
+    """
+    df01 = extracted.get("DF-01")
+    # Only cross-check when the primary source was the application form
+    if not (df01 and df01.value is not None and df01.source_doc_id == "DOC-01"):
+        return extracted
+
+    app_name = str(df01.value)
+    corroborations: List[str] = []
+    contradictions: List[str] = []
+    parse_failures: List[str] = []
+    checked_docs: List[str] = []
+
+    # ── DOC-07: supplemental form ──────────────────────────────────────────────
+    supp_path = _get_doc_path(case, "DOC-07", scenario_folder)
+    if supp_path:
+        checked_docs.append("DOC-07")
+        supp_name = _extract_legal_name_from_supplemental(supp_path)
+        if supp_name:
+            if _names_match(app_name, supp_name):
+                corroborations.append(f"DOC-07 confirms '{supp_name}'")
+            else:
+                contradictions.append(f"DOC-07 says '{supp_name}'")
+        else:
+            parse_failures.append("DOC-07 (name line not found in supplemental PDF)")
+
+    # ── DOC-04: budget worksheet ───────────────────────────────────────────────
+    budget_path = _get_doc_path(case, "DOC-04", scenario_folder)
+    if budget_path:
+        checked_docs.append("DOC-04")
+        budget_name = _extract_legal_name_from_budget(budget_path)
+        if budget_name:
+            if _names_match(app_name, budget_name):
+                corroborations.append(f"DOC-04 confirms '{budget_name}'")
+            else:
+                contradictions.append(f"DOC-04 says '{budget_name}'")
+        else:
+            parse_failures.append("DOC-04 (applicant row not found in budget worksheet)")
+
+    # ── Build updated excerpt and confidence ───────────────────────────────────
+    base_excerpt = df01.raw_excerpt or f"organization.legal_name = {app_name!r}"
+    new_conf = df01.confidence
+    extra: List[str] = []
+
+    if contradictions:
+        # Drop well below the 0.60 R-009 threshold so manual-review fires
+        new_conf = round(df01.confidence * 0.40, 2)
+        extra.append("⚠ CROSS-CHECK MISMATCH — " + "; ".join(contradictions))
+        if corroborations:
+            extra.append("partial corroboration: " + "; ".join(corroborations))
+    elif corroborations:
+        extra.append("✓ cross-checked: " + "; ".join(corroborations))
+        if parse_failures:
+            extra.append("could not parse: " + "; ".join(parse_failures))
+    elif parse_failures:
+        extra.append("ℹ submitted docs could not be parsed for name: " + "; ".join(parse_failures))
+    elif not checked_docs:
+        extra.append(
+            "ℹ form declaration only — DOC-07 and DOC-04 not submitted; "
+            "cross-document name verification not possible"
+        )
+
+    new_excerpt = base_excerpt + (" | " + " | ".join(extra) if extra else "")
+
+    extracted["DF-01"] = df01.model_copy(update={
+        "confidence": new_conf,
+        "raw_excerpt": new_excerpt,
+    })
+    return extracted
+
+
 def extract_fields(case: Case, scenario_folder: str) -> Case:
     """
     Extract 7 key fields (DF-01 to DF-07) from documents.
@@ -304,16 +405,16 @@ def extract_fields(case: Case, scenario_folder: str) -> Case:
 
     Returns updated Case.
     """
-    folder = Path(scenario_folder)
     extracted: Dict[str, ExtractedField] = {}
 
-    # ---- DOC-01: application form JSON ----------------------------------------
+    # ---- DOC-01: application form JSON (primary source) -----------------------
     app_path = _get_doc_path(case, "DOC-01", scenario_folder)
     if app_path:
         form_fields = _extract_from_app_form(app_path, case, scenario_folder)
         extracted.update(form_fields)
 
-    # ---- DOC-07: supplemental PDF — cross-check DF-01 -------------------------
+    # ---- DOC-07 / DOC-04: fallback extraction when no form is present ---------
+    # These paths only run when application_form.json was NOT submitted.
     supp_path = _get_doc_path(case, "DOC-07", scenario_folder)
     if supp_path and "DF-01" not in extracted:
         name = _extract_legal_name_from_supplemental(supp_path)
@@ -327,7 +428,6 @@ def extract_fields(case: Case, scenario_folder: str) -> Case:
                 raw_excerpt=f"Extracted from supplemental form: {name!r}",
             )
 
-    # ---- DOC-04: budget worksheet — cross-check DF-01 -------------------------
     budget_path = _get_doc_path(case, "DOC-04", scenario_folder)
     if budget_path and "DF-01" not in extracted:
         name = _extract_legal_name_from_budget(budget_path)
@@ -340,6 +440,10 @@ def extract_fields(case: Case, scenario_folder: str) -> Case:
                 confidence=0.85,
                 raw_excerpt=f"Extracted from budget worksheet: {name!r}",
             )
+
+    # ---- Cross-check form-declared values against uploaded documents ----------
+    # Always runs when a form is present; updates confidence + raw_excerpt.
+    extracted = _cross_check_df01(extracted, case, scenario_folder)
 
     # ---- Fill missing fields with empty placeholders --------------------------
     ALL_FIELDS = {
@@ -371,7 +475,11 @@ def extract_fields(case: Case, scenario_folder: str) -> Case:
         actor="system",
         details={
             "fields_extracted": [fid for fid, f in extracted.items() if f.value is not None],
-            "fields_missing": [fid for fid, f in extracted.items() if f.value is None],
+            "fields_missing":   [fid for fid, f in extracted.items() if f.value is None],
+            "cross_check_mismatches": [
+                fid for fid, f in extracted.items()
+                if f.raw_excerpt and "CROSS-CHECK MISMATCH" in (f.raw_excerpt or "")
+            ],
         },
     )
     case.audit_trail.append(audit)

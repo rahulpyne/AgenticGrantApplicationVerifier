@@ -104,9 +104,20 @@ function classifyConfidenceReason(c: number, _matchedOn: string): string {
 // ─── Field extraction confidence reasoning ────────────────────────────────────
 
 function extractConfidenceReason(field: ExtractedField): string {
-  const { field_id, confidence, value } = field;
+  const { field_id, confidence, value, raw_excerpt } = field;
   if (value === null || confidence === 0)
     return "Field absent from all submitted documents — manual entry required for processing";
+
+  // Cross-check mismatch is the most important signal — explain it first.
+  if (raw_excerpt?.includes("CROSS-CHECK MISMATCH"))
+    return `Cross-check FAILED — the value declared in the application form was NOT found in the uploaded documents. Confidence dropped from ~97% to ${Math.round(confidence * 100)}% to trigger mandatory officer review (R-009). Do not accept this value without manual verification.`;
+  if (raw_excerpt?.includes("✓ cross-checked"))
+    return "Declared in application form AND independently confirmed by matching text in the uploaded documents — highest reliability.";
+  if (raw_excerpt?.includes("form declaration only"))
+    return "Declared in application form only — DOC-07 and DOC-04 were not submitted so cross-document verification was not possible.";
+  if (raw_excerpt?.includes("could not be parsed"))
+    return "Supporting documents were submitted but the legal name line could not be parsed from them — officer should manually verify this value.";
+
   if (confidence >= 0.97) {
     if (field_id === "DF-02")
       return "Found in structured JSON and passed 9-digit CRA Business Number format validation";
@@ -286,9 +297,28 @@ function ThresholdBar({ value, threshold, label }: { value: number; threshold: n
 }
 
 function EvidenceBox({ text }: { text: string }) {
+  // Split on the pipe separator used by the cross-check step so each segment
+  // renders on its own line with a colour that matches its status.
+  const segments = text.split(" | ").map(s => s.trim()).filter(Boolean);
   return (
-    <div style={{ marginTop: 6, padding: "6px 10px", background: "#1E293B", borderRadius: 6, fontFamily: "monospace", fontSize: 11, color: "#93C5FD", wordBreak: "break-all" as const }}>
-      <span style={{ color: "#94A3B8", marginRight: 6 }}>↳ source:</span>{text}
+    <div style={{ marginTop: 6, padding: "6px 10px", background: "#1E293B", borderRadius: 6, fontFamily: "monospace", fontSize: 11, wordBreak: "break-all" as const }}>
+      {segments.map((seg, i) => {
+        const isMismatch     = seg.startsWith("⚠");
+        const isConfirmed    = seg.startsWith("✓");
+        const isInfo         = seg.startsWith("ℹ");
+        const color = isMismatch  ? "#FCA5A5"
+                    : isConfirmed ? "#86EFAC"
+                    : isInfo      ? "#FCD34D"
+                    : "#93C5FD";
+        const prefix = i === 0
+          ? <span style={{ color: "#94A3B8", marginRight: 6 }}>↳ source:</span>
+          : <span style={{ color: "#94A3B8", marginRight: 6 }}>↳ check: </span>;
+        return (
+          <div key={i} style={{ color, marginTop: i > 0 ? 4 : 0 }}>
+            {prefix}{seg}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -517,18 +547,27 @@ function StepExtract({ fields }: { fields: Record<string, ExtractedField> }) {
             ? JSON.stringify(field.value)
             : String(field.value);
 
+          // Cross-check badge — shown on the summary row so it's visible without expanding
+          const hasMismatch   = field.raw_excerpt?.includes("CROSS-CHECK MISMATCH");
+          const hasConfirmed  = field.raw_excerpt?.includes("✓ cross-checked");
+          const formDeclOnly  = field.raw_excerpt?.includes("form declaration only");
+          const borderColor   = hasMismatch ? "#FCA5A5" : lowConf ? "#FCD34D" : "#E5E7EB";
+
           return (
-            <div key={field.field_id} style={{ border: `1px solid ${lowConf ? "#FCD34D" : "#E5E7EB"}`, borderRadius: 8, overflow: "hidden" }}>
+            <div key={field.field_id} style={{ border: `1px solid ${borderColor}`, borderRadius: 8, overflow: "hidden" }}>
               {/* Summary row */}
               <button
                 onClick={() => setExpanded(isOpen ? null : field.field_id)}
-                style={{ display: "flex", alignItems: "center", gap: 10, width: "100%", background: "#F9FAFB", border: "none", padding: "9px 14px", cursor: "pointer", textAlign: "left" as const }}
+                style={{ display: "flex", alignItems: "center", gap: 10, width: "100%", background: hasMismatch ? "#FEF2F2" : "#F9FAFB", border: "none", padding: "9px 14px", cursor: "pointer", textAlign: "left" as const }}
               >
                 <span style={{ fontFamily: "monospace", fontSize: 11, color: "#005E6E", background: "#E6F4F6", padding: "2px 7px", borderRadius: 4, fontWeight: 700, flexShrink: 0 }}>
                   {field.field_id}
                 </span>
                 <span style={{ fontSize: 13, fontWeight: 600, color: "#111827", flex: 1 }}>{field.name}</span>
-                {lowConf && <Tag color="#92400E" bg="#FEF3C7" text="REVIEW" />}
+                {hasMismatch  && <Tag color="#B91C1C" bg="#FEE2E2" text="⚠ MISMATCH" />}
+                {hasConfirmed && <Tag color="#065F46" bg="#D1FAE5" text="✓ VERIFIED" />}
+                {formDeclOnly && <Tag color="#92400E" bg="#FEF3C7" text="ℹ UNVERIFIED" />}
+                {lowConf && !hasMismatch && <Tag color="#92400E" bg="#FEF3C7" text="REVIEW" />}
                 <span style={{ fontSize: 12, color: "#6B7280", marginLeft: 4 }}>{isOpen ? "▲" : "▼"}</span>
               </button>
 
