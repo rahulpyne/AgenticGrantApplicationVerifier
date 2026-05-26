@@ -500,10 +500,11 @@ async def submit_application(
     cra_business_number: str = Form(default=""),
     incorporation_date: str = Form(default=""),
     province: str = Form(default="BC"),
-    pacifican_facility: bool = Form(default=True),
+    pacifican_facility: str = Form(default="true"),   # receive as str, parse below
     project_type: str = Form(default="non_tech"),
+    org_type: str = Form(default="for-profit"),
     requested_amount: float = Form(default=0.0),
-    marketing_amount: float = Form(default=0.0),
+    matching_amount: float = Form(default=0.0),
     project_start: str = Form(default=""),
     project_end: str = Form(default=""),
     files: List[UploadFile] = File(default=[]),
@@ -512,7 +513,13 @@ async def submit_application(
     Applicant file upload endpoint. Accepts multipart form data with
     documents + applicant info fields. Runs the full intake pipeline
     and returns a case ID.
+
+    Generates application_form.json using the same nested schema the
+    extractor expects (organization / project / funding sections).
     """
+    bc_facility = str(pacifican_facility).lower() not in ("false", "0", "no")
+    tech_comm   = project_type == "tech_commercialization"
+
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     submission_dir = UPLOAD_DIR / uuid.uuid4().hex[:8].upper()
     submission_dir.mkdir(parents=True)
@@ -527,17 +534,38 @@ async def submit_application(
             has_app_form = True
 
     if not has_app_form:
+        # Build the same nested structure the extractor reads:
+        #   extractor.py → _extract_from_app_form()
+        #     data["organization"]["legal_name"]              → DF-01
+        #     data["organization"]["cra_business_number"]     → DF-02
+        #     data["organization"]["incorporation_date"]      → DF-03
+        #     data["organization"]["bc_operating_facilities"] → DF-04
+        #     data["project"]["address"]["province"]          → DF-04
+        #     data["project"]["start_date"]                   → DF-07
+        #     data["project"]["end_date"]                     → DF-07
+        #     data["project"]["technology_commercialization"] → R-007/R-008
+        #     data["funding"]["total_rda_funding_requested"]  → DF-05
+        #     data["funding"]["total_non_rda_funding"]        → DF-06
         app_form: Dict[str, Any] = {
-            "legal_name": applicant_name,
-            "cra_business_number": cra_business_number,
-            "incorporation_date": incorporation_date,
-            "province": province,
-            "pacifican_facility": pacifican_facility,
-            "project_type": project_type,
-            "requested_pacifican_amount": requested_amount,
-            "marketing_non_pacifican_funding": marketing_amount,
-            "project_period_start": project_start,
-            "project_period_end": project_end,
+            "organization": {
+                "legal_name":              applicant_name.strip(),
+                "cra_business_number":     cra_business_number.strip() or None,
+                "incorporation_date":      incorporation_date or None,
+                "bc_operating_facilities": bc_facility,
+                "corporate_status":        org_type,
+            },
+            "project": {
+                "address": {
+                    "province": province,
+                },
+                "start_date":                    project_start or None,
+                "end_date":                      project_end or None,
+                "technology_commercialization":  tech_comm,
+            },
+            "funding": {
+                "total_rda_funding_requested": requested_amount,
+                "total_non_rda_funding":        matching_amount,
+            },
         }
         with (submission_dir / "application_form.json").open("w") as fh:
             json.dump(app_form, fh, indent=2)

@@ -20,6 +20,31 @@ const REQUIRED_DOCS = [
 ];
 
 const PROVINCES = ["BC", "AB", "SK", "MB", "ON", "QC", "NB", "NS", "PE", "NL", "YT", "NT", "NU"];
+const ORG_TYPES = [
+  { value: "for-profit",    label: "For-Profit Corporation (Inc. / Ltd.)" },
+  { value: "non-profit",    label: "Non-Profit / Society" },
+  { value: "partnership",   label: "Partnership" },
+  { value: "sole-proprietor", label: "Sole Proprietor" },
+  { value: "cooperative",   label: "Cooperative" },
+];
+
+// Validation helpers
+const CRA_RE = /^\d{9}$/;
+function validateCra(v: string) {
+  if (!v) return null; // optional
+  return CRA_RE.test(v.replace(/\s|-/g, "")) ? null : "Must be exactly 9 digits (e.g. 123456789)";
+}
+function validateAmount(v: string, min: number, max: number, label: string) {
+  const n = parseFloat(v);
+  if (!v || isNaN(n)) return `${label} is required`;
+  if (n < min) return `Must be ≥ $${min.toLocaleString()}`;
+  if (n > max) return `Must be ≤ $${max.toLocaleString()}`;
+  return null;
+}
+function validateDates(start: string, end: string) {
+  if (!start || !end) return null;
+  return new Date(start) < new Date(end) ? null : "Start date must be before end date";
+}
 
 function fmt(bytes: number) {
   if (bytes < 1024) return `${bytes} B`;
@@ -43,12 +68,35 @@ export default function ApplicantPortal() {
   const [craNumber, setCraNumber] = useState("");
   const [incorporationDate, setIncorporationDate] = useState("");
   const [province, setProvince] = useState("BC");
-  const [pacificanFacility, setPacificanFacility] = useState(true);
+  const [pacificanFacility, setPacificanFacility] = useState("true");
   const [projectType, setProjectType] = useState("non_tech");
+  const [orgType, setOrgType] = useState("for-profit");
   const [requestedAmount, setRequestedAmount] = useState("");
-  const [marketingAmount, setMarketingAmount] = useState("");
+  const [matchingAmount, setMatchingAmount] = useState("");
   const [projectStart, setProjectStart] = useState("");
   const [projectEnd, setProjectEnd] = useState("");
+
+  // Inline validation errors (shown on blur / submit attempt)
+  const [touched, setTouched] = useState<Record<string, boolean>>({});
+  const touch = (field: string) => setTouched(p => ({ ...p, [field]: true }));
+
+  const craError    = touched.cra     ? validateCra(craNumber) : null;
+  const amtError    = touched.amount  ? validateAmount(requestedAmount, 100_000, 10_000_000, "Requested PacifiCan Amount") : null;
+  const dateError   = touched.dates   ? validateDates(projectStart, projectEnd) : null;
+  const nameError   = touched.name && !applicantName.trim() ? "Applicant name is required" : null;
+
+  // Soft range warning (not blocking) for matching funds
+  const matchingWarn = matchingAmount && requestedAmount
+    ? (() => {
+        const rda = parseFloat(requestedAmount);
+        const other = parseFloat(matchingAmount);
+        if (!isNaN(rda) && !isNaN(other) && rda + other > 0) {
+          const share = rda / (rda + other);
+          if (share > 0.75) return `PacifiCan share is ${(share * 100).toFixed(1)}% — exceeds the 75% limit (R-005 will flag this)`;
+        }
+        return null;
+      })()
+    : null;
 
   // File upload
   const [files, setFiles] = useState<File[]>([]);
@@ -107,12 +155,17 @@ export default function ApplicantPortal() {
   const removeFile = (name: string) =>
     setFiles((prev) => prev.filter((f) => f.name !== name));
 
-  const hasAppFormJson = files.some((f) => f.name === "application_form.json");
-
   const handleSubmit = async () => {
-    if (!applicantName.trim() && !hasAppFormJson) {
-      setError("Applicant name is required (or upload an application_form.json).");
-      return;
+    // Touch all fields to surface validation errors
+    setTouched({ name: true, cra: true, amount: true, dates: true });
+
+    if (!hasAppFormJson) {
+      if (!applicantName.trim()) { setError("Applicant name is required."); return; }
+      if (validateCra(craNumber))  { setError("Fix the CRA Business Number before submitting."); return; }
+      if (validateAmount(requestedAmount, 100_000, 10_000_000, "Requested PacifiCan Amount")) {
+        setError("Requested PacifiCan Amount must be between $100,000 and $10,000,000."); return;
+      }
+      if (validateDates(projectStart, projectEnd)) { setError("Project start date must be before end date."); return; }
     }
     if (files.length === 0) {
       setError("Please upload at least one document before submitting.");
@@ -123,16 +176,17 @@ export default function ApplicantPortal() {
     setError(null);
 
     const fd = new FormData();
-    fd.append("applicant_name", applicantName || "Unknown Applicant");
-    fd.append("cra_business_number", craNumber);
+    fd.append("applicant_name",     applicantName.trim() || "Unknown Applicant");
+    fd.append("cra_business_number", craNumber.replace(/\s|-/g, ""));
     fd.append("incorporation_date", incorporationDate);
-    fd.append("province", province);
-    fd.append("pacifican_facility", String(pacificanFacility));
-    fd.append("project_type", projectType);
-    fd.append("requested_amount", requestedAmount || "0");
-    fd.append("marketing_amount", marketingAmount || "0");
-    fd.append("project_start", projectStart);
-    fd.append("project_end", projectEnd);
+    fd.append("province",           province);
+    fd.append("pacifican_facility", pacificanFacility);
+    fd.append("project_type",       projectType);
+    fd.append("org_type",           orgType);
+    fd.append("requested_amount",   requestedAmount || "0");
+    fd.append("matching_amount",    matchingAmount  || "0");
+    fd.append("project_start",      projectStart);
+    fd.append("project_end",        projectEnd);
     files.forEach((f) => fd.append("files", f));
 
     try {
@@ -210,11 +264,10 @@ export default function ApplicantPortal() {
           <button
             className="btn-secondary"
             onClick={() => {
-              setResult(null);
-              setCaseDetail(null);
-              setFiles([]);
-              setApplicantName("");
-              setCraNumber("");
+              setResult(null); setCaseDetail(null); setFiles([]);
+              setApplicantName(""); setCraNumber(""); setIncorporationDate("");
+              setRequestedAmount(""); setMatchingAmount(""); setProjectStart(""); setProjectEnd("");
+              setTouched({});
             }}
           >
             ← Submit Another Application
@@ -269,97 +322,137 @@ export default function ApplicantPortal() {
             <div className="alert alert-info" style={{ marginBottom: 16 }}>
               <span>ℹ</span>
               <span>
-                <code>application_form.json</code> detected in your upload — these fields will be ignored and
-                the uploaded form data will be used instead.
+                <code>application_form.json</code> detected — form fields are ignored and the uploaded JSON will be used directly.
               </span>
             </div>
           )}
 
+          {/* Row 1: Name + CRA */}
           <div className="grid-2" style={{ marginBottom: 16 }}>
             <div>
-              <label>Legal / Company Name *</label>
+              <label>Legal / Registered Company Name *</label>
               <input
                 value={applicantName}
                 onChange={(e) => setApplicantName(e.target.value)}
+                onBlur={() => touch("name")}
                 placeholder="e.g. Cascadia Defence Systems Inc."
                 disabled={hasAppFormJson}
+                style={{ borderColor: nameError ? "#DC2626" : undefined }}
               />
+              {nameError && <div style={{ color: "#DC2626", fontSize: 11, marginTop: 3 }}>⚠ {nameError}</div>}
             </div>
             <div>
-              <label>CRA Business Number</label>
+              <label>CRA Business Number (9 digits)</label>
               <input
                 value={craNumber}
                 onChange={(e) => setCraNumber(e.target.value)}
-                placeholder="9-digit BN, e.g. 123456789"
+                onBlur={() => touch("cra")}
+                placeholder="e.g. 123456789"
                 disabled={hasAppFormJson}
+                style={{ borderColor: craError ? "#DC2626" : craNumber && !craError ? "#059669" : undefined }}
               />
+              {craError
+                ? <div style={{ color: "#DC2626", fontSize: 11, marginTop: 3 }}>⚠ {craError}</div>
+                : craNumber && !validateCra(craNumber)
+                ? <div style={{ color: "#059669", fontSize: 11, marginTop: 3 }}>✓ Valid 9-digit CRA BN</div>
+                : null}
             </div>
           </div>
 
+          {/* Row 2: Incorporation date + Organisation type */}
           <div className="grid-2" style={{ marginBottom: 16 }}>
             <div>
-              <label>Incorporation Date</label>
+              <label>Date Established in Canada</label>
               <input
                 type="date"
                 value={incorporationDate}
                 onChange={(e) => setIncorporationDate(e.target.value)}
                 disabled={hasAppFormJson}
               />
+              <div className="text-xs text-muted" style={{ marginTop: 3 }}>Used for R-012 (≥ 2 years operating history)</div>
             </div>
             <div>
-              <label>Province / Territory</label>
+              <label>Organisation Type</label>
+              <select value={orgType} onChange={(e) => setOrgType(e.target.value)} disabled={hasAppFormJson}>
+                {ORG_TYPES.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+              </select>
+              <div className="text-xs text-muted" style={{ marginTop: 3 }}>Used for ER-01 (eligible recipient type)</div>
+            </div>
+          </div>
+
+          {/* Row 3: Province + BC facility */}
+          <div className="grid-2" style={{ marginBottom: 16 }}>
+            <div>
+              <label>Province / Territory of Operations</label>
               <select value={province} onChange={(e) => setProvince(e.target.value)} disabled={hasAppFormJson}>
                 {PROVINCES.map((p) => <option key={p} value={p}>{p}</option>)}
               </select>
             </div>
+            <div>
+              <label>BC Operating Facility? (R-011)</label>
+              <select value={pacificanFacility} onChange={(e) => setPacificanFacility(e.target.value)} disabled={hasAppFormJson}>
+                <option value="true">Yes — we operate from a BC facility</option>
+                <option value="false">No — no BC operating presence</option>
+              </select>
+              {pacificanFacility === "false" && (
+                <div style={{ color: "#D97706", fontSize: 11, marginTop: 3 }}>⚠ R-011 will flag this for officer review</div>
+              )}
+            </div>
           </div>
 
+          {/* Row 4: Project type */}
           <div className="grid-2" style={{ marginBottom: 16 }}>
             <div>
               <label>Project Type</label>
               <select value={projectType} onChange={(e) => setProjectType(e.target.value)} disabled={hasAppFormJson}>
-                <option value="non_tech">Non-Technology / General</option>
+                <option value="non_tech">Non-Technology / General RDII</option>
                 <option value="tech_commercialization">Technology Commercialization</option>
               </select>
-            </div>
-            <div>
-              <label>PacifiCan-Eligible BC Facility?</label>
-              <select
-                value={String(pacificanFacility)}
-                onChange={(e) => setPacificanFacility(e.target.value === "true")}
-                disabled={hasAppFormJson}
-              >
-                <option value="true">Yes</option>
-                <option value="false">No</option>
-              </select>
+              {projectType === "tech_commercialization" && (
+                <div style={{ color: "#2563EB", fontSize: 11, marginTop: 3 }}>
+                  ℹ Tech Commercialization requires DOC-08 (Technology Questionnaire) — R-007 &amp; R-008 will apply
+                </div>
+              )}
             </div>
           </div>
 
+          {/* Row 5: Funding amounts */}
           <div className="grid-2" style={{ marginBottom: 16 }}>
             <div>
-              <label>Requested PacifiCan Amount ($)</label>
+              <label>Requested PacifiCan Amount ($) *</label>
               <input
                 type="number"
                 value={requestedAmount}
                 onChange={(e) => setRequestedAmount(e.target.value)}
-                placeholder="e.g. 500000"
+                onBlur={() => touch("amount")}
+                placeholder="Min $100,000 — Max $10,000,000"
                 min={0}
                 disabled={hasAppFormJson}
+                style={{ borderColor: amtError ? "#DC2626" : requestedAmount && !amtError ? "#059669" : undefined }}
               />
+              {amtError
+                ? <div style={{ color: "#DC2626", fontSize: 11, marginTop: 3 }}>⚠ {amtError} (R-006)</div>
+                : requestedAmount && !validateAmount(requestedAmount, 100_000, 10_000_000, "")
+                ? <div style={{ color: "#059669", fontSize: 11, marginTop: 3 }}>✓ Within eligible range $100K–$10M</div>
+                : null}
             </div>
             <div>
-              <label>Other / Non-PacifiCan Funding ($)</label>
+              <label>Matching / Non-PacifiCan Funding ($)</label>
               <input
                 type="number"
-                value={marketingAmount}
-                onChange={(e) => setMarketingAmount(e.target.value)}
+                value={matchingAmount}
+                onChange={(e) => setMatchingAmount(e.target.value)}
                 placeholder="e.g. 250000"
                 min={0}
                 disabled={hasAppFormJson}
+                style={{ borderColor: matchingWarn ? "#D97706" : undefined }}
               />
+              {matchingWarn && <div style={{ color: "#D97706", fontSize: 11, marginTop: 3 }}>⚠ {matchingWarn}</div>}
+              <div className="text-xs text-muted" style={{ marginTop: 3 }}>Used for R-005 (PacifiCan share ≤ 75%)</div>
             </div>
           </div>
 
+          {/* Row 6: Project dates */}
           <div className="grid-2">
             <div>
               <label>Project Start Date</label>
@@ -367,7 +460,9 @@ export default function ApplicantPortal() {
                 type="date"
                 value={projectStart}
                 onChange={(e) => setProjectStart(e.target.value)}
+                onBlur={() => touch("dates")}
                 disabled={hasAppFormJson}
+                style={{ borderColor: dateError ? "#DC2626" : undefined }}
               />
             </div>
             <div>
@@ -376,8 +471,12 @@ export default function ApplicantPortal() {
                 type="date"
                 value={projectEnd}
                 onChange={(e) => setProjectEnd(e.target.value)}
+                onBlur={() => touch("dates")}
                 disabled={hasAppFormJson}
+                style={{ borderColor: dateError ? "#DC2626" : undefined }}
               />
+              {dateError && <div style={{ color: "#DC2626", fontSize: 11, marginTop: 3 }}>⚠ {dateError}</div>}
+              <div className="text-xs text-muted" style={{ marginTop: 3 }}>R-004 checks: Apr 1, 2026 – Mar 31, 2028</div>
             </div>
           </div>
         </div>
