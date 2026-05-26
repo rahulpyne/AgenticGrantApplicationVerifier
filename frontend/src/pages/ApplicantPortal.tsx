@@ -155,6 +155,9 @@ export default function ApplicantPortal() {
   const removeFile = (name: string) =>
     setFiles((prev) => prev.filter((f) => f.name !== name));
 
+  // True when the user has uploaded their own application_form.json — form fields are bypassed
+  const hasAppFormJson = files.some((f) => f.name === "application_form.json");
+
   const handleSubmit = async () => {
     // Touch all fields to surface validation errors
     setTouched({ name: true, cra: true, amount: true, dates: true });
