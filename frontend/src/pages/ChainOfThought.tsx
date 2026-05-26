@@ -143,8 +143,31 @@ function rulePassReason(
   const amt  = (v: unknown) => { const n = numVal(v); return n != null ? fmtAmount(n) : "N/A"; };
 
   switch (ruleId) {
-    case "R-002":
-      return "Legal name cross-checked across application form, budget worksheet, and supplemental form — all sources consistent, no mismatch detected";
+    case "R-002": {
+      // Show exactly what was compared — not a generic "all match" message.
+      // If R-002 reached rulePassReason at all it means the backend found docs
+      // to compare AND all names matched (otherwise a finding would have fired).
+      const doc07 = checklist.find(c => c.doc_id === "DOC-07");
+      const doc04 = checklist.find(c => c.doc_id === "DOC-04");
+      const df01  = f("DF-01");
+      const appName = typeof df01?.value === "string" ? `"${df01.value}"` : "application form";
+
+      const compared: string[] = [];
+      const missing:  string[] = [];
+      if (doc07?.status === "present") compared.push("supplemental form (DOC-07)");
+      else                             missing.push("DOC-07");
+      if (doc04?.status === "present") compared.push("budget worksheet (DOC-04)");
+      else                             missing.push("DOC-04");
+
+      if (compared.length === 0) {
+        // Should not normally reach here since the backend now emits an info
+        // finding in this case, but handle it defensively.
+        return `No cross-documents present — name consistency could not be verified (${missing.join(", ")} not submitted)`;
+      }
+      const checkedStr = compared.join(" and ");
+      const skippedStr = missing.length > 0 ? `   |   ${missing.join(", ")} not submitted — skipped` : "";
+      return `${appName} cross-checked against ${checkedStr}${skippedStr}   →  all names consistent ✓`;
+    }
     case "R-003":
       return "Budget worksheet Total Project Costs matches the application form requested amount — no discrepancy found";
     case "R-004": {

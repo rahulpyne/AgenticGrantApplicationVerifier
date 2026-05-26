@@ -278,7 +278,14 @@ def _r002(
     submission_folder: str,
     fields: Dict[str, ExtractedField],
 ) -> None:
-    """R-002: Legal name cross-document mismatch."""
+    """R-002: Legal name cross-document mismatch.
+
+    Three possible outcomes:
+    1. Names compared and MATCH → no finding (passed)
+    2. Names compared and DIFFER → warning finding
+    3. Cross-document is PRESENT but name extraction failed → manual_review finding
+    4. No cross-documents present at all → info finding (check skipped, not green)
+    """
     folder = Path(submission_folder)
     app_name: Optional[str] = None
     supp_name: Optional[str] = None
@@ -289,9 +296,14 @@ def _r002(
     if df01 and df01.value:
         app_name = str(df01.value)
 
+    # Track which cross-documents are actually present in the submission
+    supp_doc_present = False
+    budget_doc_present = False
+
     # Get name from supplemental form (DOC-07) by reading PDF text
     for doc in case.documents:
         if doc.detected_doc_type == "DOC-07":
+            supp_doc_present = True
             path = folder / doc.name
             if path.exists():
                 text = _read_pdf_text(str(path))
@@ -306,6 +318,7 @@ def _r002(
     # Get name from budget worksheet (DOC-04) — "Applicant:" header row
     for doc in case.documents:
         if doc.detected_doc_type == "DOC-04":
+            budget_doc_present = True
             path = folder / doc.name
             if path.exists():
                 try:
@@ -332,6 +345,46 @@ def _r002(
     if not app_name:
         return
 
+    # ── Case 3: doc present but name extraction failed ─────────────────────────
+    # These are actionable: the officer must check manually.
+    if supp_doc_present and not supp_name:
+        findings.append(Finding(
+            id="R-002-supp-extract-failed",
+            rule_id="R-002",
+            severity=Severity.manual_review,
+            message=(
+                "Legal name could not be parsed from supplemental form (DOC-07). "
+                "Officer must manually verify the legal name matches the application form."
+            ),
+        ))
+    if budget_doc_present and not budget_name:
+        findings.append(Finding(
+            id="R-002-budget-extract-failed",
+            rule_id="R-002",
+            severity=Severity.manual_review,
+            message=(
+                "Legal name could not be parsed from budget worksheet (DOC-04). "
+                "Officer must manually verify the legal name matches the application form."
+            ),
+        ))
+
+    # ── Case 4: no cross-documents at all ─────────────────────────────────────
+    # This is a coverage gap, not a pass — flag it so it doesn't show green.
+    if not supp_doc_present and not budget_doc_present:
+        findings.append(Finding(
+            id="R-002-no-cross-docs",
+            rule_id="R-002",
+            severity=Severity.info,
+            message=(
+                f"Name consistency check SKIPPED — neither the supplemental form (DOC-07) "
+                f"nor the budget worksheet (DOC-04) was submitted. "
+                f"Application form declares '{app_name}'. "
+                f"Cross-document verification is not possible without these documents."
+            ),
+        ))
+        return
+
+    # ── Case 1 & 2: run the mismatch comparison ────────────────────────────────
     sources = {"application form": app_name}
     if supp_name:
         sources["supplemental form"] = supp_name
