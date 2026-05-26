@@ -90,7 +90,7 @@ function classifySignals(doc: DocumentRecord): Signal[] {
   return sigs;
 }
 
-function classifyConfidenceReason(c: number, matchedOn: string): string {
+function classifyConfidenceReason(c: number, _matchedOn: string): string {
   if (c >= 0.98) return "Content-verified: structural marker found inside file body (strongest signal)";
   if (c >= 0.95) return "Content-verified: characteristic worksheet tab/section found inside file";
   if (c >= 0.90) return "Strong keyword match in filename — unambiguous single-category signal";
