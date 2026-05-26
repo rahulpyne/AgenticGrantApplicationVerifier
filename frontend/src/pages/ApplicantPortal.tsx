@@ -1,10 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import {
+  getCase,
   getTestPackages,
   submitApplication,
   testPackageDownloadUrl,
 } from "../api";
-import type { SubmitResult, TestPackage } from "../api";
+import type { Case, SubmitResult, TestPackage } from "../api";
+import ChainOfThought from "./ChainOfThought";
 
 const REQUIRED_DOCS = [
   { id: "DOC-02", label: "Annual Financial Statements", hint: "Last 2 fiscal years", ext: "PDF" },
@@ -55,10 +58,31 @@ export default function ApplicantPortal() {
   // Submission
   const [submitting, setSubmitting] = useState(false);
   const [result, setResult] = useState<SubmitResult | null>(null);
+  const [caseDetail, setCaseDetail] = useState<Case | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   // Test packages
   const [packages, setPackages] = useState<TestPackage[]>([]);
+
+  // ?preview=CASE_ID → auto-load chain-of-thought for that case
+  const [searchParams] = useSearchParams();
+  useEffect(() => {
+    const previewId = searchParams.get("preview");
+    if (previewId && !result) {
+      getCase(previewId)
+        .then((c) => {
+          setResult({
+            case_id: c.case_id,
+            basket: c.basket,
+            status: c.status,
+            missing_count: c.missing_count,
+            message: "Application trace loaded.",
+          });
+          setCaseDetail(c);
+        })
+        .catch(() => {});
+    }
+  }, [searchParams]); // eslint-disable-line
 
   useEffect(() => {
     getTestPackages().then(setPackages).catch(() => {});
@@ -114,6 +138,8 @@ export default function ApplicantPortal() {
     try {
       const res = await submitApplication(fd);
       setResult(res);
+      // Fetch full case for chain-of-thought trace
+      getCase(res.case_id).then(setCaseDetail).catch(() => {});
     } catch (e: unknown) {
       const msg =
         (e as { response?: { data?: { detail?: string } } })?.response?.data
@@ -126,53 +152,73 @@ export default function ApplicantPortal() {
 
   if (result) {
     return (
-      <div style={{ maxWidth: 680, margin: "0 auto" }}>
+      <div style={{ maxWidth: 900, margin: "0 auto" }}>
+        {/* Result summary card */}
         <div className="card">
-          <div className="card-header" style={{ background: "#F0FDF4", color: "#15803D" }}>
+          <div className="card-header" style={{ background: "#F0FDF4", color: "#15803D", fontSize: 15 }}>
             ✓ Application Submitted Successfully
           </div>
           <div className="card-body">
-            <div style={{ marginBottom: 24 }}>
-              <div className="text-muted text-sm" style={{ marginBottom: 4 }}>Your Application ID</div>
-              <div style={{ fontFamily: "monospace", fontSize: 22, fontWeight: 700, color: "var(--primary)", letterSpacing: 1 }}>
-                {result.case_id}
+            <div style={{ display: "flex", gap: 32, flexWrap: "wrap", alignItems: "flex-start" }}>
+              <div>
+                <div className="text-muted text-sm" style={{ marginBottom: 4 }}>Your Application ID</div>
+                <div style={{ fontFamily: "monospace", fontSize: 22, fontWeight: 700, color: "var(--primary)", letterSpacing: 1 }}>
+                  {result.case_id}
+                </div>
+                <div className="text-sm text-muted" style={{ marginTop: 4 }}>
+                  Keep this ID for records and any follow-up correspondence.
+                </div>
               </div>
-              <div className="text-sm text-muted" style={{ marginTop: 4 }}>
-                Please keep this ID for your records and any follow-up correspondence.
+              <div>
+                <div className="text-muted text-sm" style={{ marginBottom: 6 }}>Initial Assessment</div>
+                <BasketBadge basket={result.basket} />
               </div>
             </div>
 
-            <div style={{ marginBottom: 20 }}>
-              <span className="text-muted text-sm" style={{ marginRight: 8 }}>Initial Assessment:</span>
-              <BasketBadge basket={result.basket} />
-            </div>
-
-            <div className="alert alert-info" style={{ marginBottom: 20 }}>
+            <div className="alert alert-info" style={{ marginTop: 16, marginBottom: 0 }}>
               {result.message}
             </div>
 
             {result.missing_count > 0 && (
-              <div className="alert alert-warning">
+              <div className="alert alert-warning" style={{ marginTop: 12, marginBottom: 0 }}>
                 <span>⚠</span>
                 <span>
-                  <strong>{result.missing_count} document(s)</strong> could not be matched in your submission.
-                  You will receive an email listing the missing items.
+                  <strong>{result.missing_count} document(s)</strong> could not be matched.
+                  You will receive an email listing the outstanding items.
                 </span>
               </div>
             )}
-
-            <button
-              className="btn-secondary"
-              onClick={() => {
-                setResult(null);
-                setFiles([]);
-                setApplicantName("");
-                setCraNumber("");
-              }}
-            >
-              Submit Another Application
-            </button>
           </div>
+        </div>
+
+        {/* Chain of thought — shown once full case data is loaded */}
+        {caseDetail ? (
+          <div className="card">
+            <div className="card-body">
+              <ChainOfThought c={caseDetail} />
+            </div>
+          </div>
+        ) : (
+          <div className="card">
+            <div className="card-body text-muted" style={{ textAlign: "center", padding: 32 }}>
+              🧠 Loading decision trace…
+            </div>
+          </div>
+        )}
+
+        <div style={{ marginBottom: 40, marginTop: 8 }}>
+          <button
+            className="btn-secondary"
+            onClick={() => {
+              setResult(null);
+              setCaseDetail(null);
+              setFiles([]);
+              setApplicantName("");
+              setCraNumber("");
+            }}
+          >
+            ← Submit Another Application
+          </button>
         </div>
       </div>
     );
