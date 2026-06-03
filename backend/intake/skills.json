@@ -1,0 +1,81 @@
+{
+  "version": "1.0",
+  "description": "Extraction skills for application verification. This is the ONLY file with domain-specific knowledge. Edit or swap this file to change what is extracted — no code changes required.",
+
+  "fields": [
+    {
+      "field_id": "DF-01",
+      "name": "Legal Organisation Name",
+      "description": "The full legal/registered name of the applying organisation as it would appear on official government documents.",
+      "extraction_prompt": "What is the full legal or registered name of the applicant organisation? It may appear next to labels such as 'Legal Name', 'Organisation Name', 'Applicant Name', 'Business Name', 'Company Name', 'Registered Name', or prominently at the top of a document as a letterhead or title. Return the exact name including any corporate suffix (Inc., Ltd., Corp., Limited, LP, LLP, etc.).",
+      "type": "string",
+      "required": true,
+      "confidence_default": 0.95,
+      "cross_check": true,
+      "cross_check_docs": ["DOC-02", "DOC-03", "DOC-04", "DOC-05", "DOC-06", "DOC-07"],
+      "cross_check_prompt": "What is the full legal name of the organisation that created, owns, or is the subject of this document? Return only the exact organisation name as it appears — nothing else. If no clear legal name is present, return NONE.",
+      "validation_hint": "Proper noun ending with a corporate suffix or clearly a registered entity name"
+    },
+    {
+      "field_id": "DF-02",
+      "name": "Business Registration Number",
+      "description": "The primary government-issued business identifier — CRA business number, company registration number, tax ID, or equivalent.",
+      "extraction_prompt": "What is the business registration number, CRA business number, tax identification number, or primary government-issued identifier for the applicant organisation? It is typically a 9-digit number or alphanumeric code found near labels like 'Business Number', 'CRA No.', 'Registration No.', 'Tax ID', 'BN'. Return the number exactly as it appears.",
+      "type": "string",
+      "required": false,
+      "confidence_default": 0.95,
+      "cross_check": false
+    },
+    {
+      "field_id": "DF-03",
+      "name": "Incorporation / Establishment Date",
+      "description": "The date the organisation was incorporated, registered, or legally established.",
+      "extraction_prompt": "What is the date the organisation was incorporated, registered, or legally established? Look for labels like 'Incorporation Date', 'Date Established', 'Date of Incorporation', 'Registration Date', 'Date Founded'. Return in YYYY-MM-DD format where possible, or as stated in the document.",
+      "type": "date",
+      "required": false,
+      "confidence_default": 0.95,
+      "cross_check": false
+    },
+    {
+      "field_id": "DF-04",
+      "name": "Location — Province and Operating Facilities",
+      "description": "The province/territory where the project is located AND whether the applicant has operating facilities in BC.",
+      "extraction_prompt": "Extract two things from the document: (1) the province or territory where the project will be carried out or where the applicant operates, and (2) whether the applicant has operating facilities in British Columbia (BC). Return as a JSON object with keys 'province' (string, e.g. 'BC', 'AB', 'ON') and 'bc_operating_facilities' (boolean true/false). Look for address fields, project location, 'province', 'territory', or explicit mentions of BC operations.",
+      "type": "object",
+      "required": true,
+      "confidence_default": 0.92,
+      "cross_check": false
+    },
+    {
+      "field_id": "DF-05",
+      "name": "Requested Grant Amount",
+      "description": "The total dollar amount being requested from the funding programme.",
+      "extraction_prompt": "What is the total dollar amount the applicant is requesting from this funding programme? Look for labels like 'Requested Amount', 'Funding Requested', 'RDA Funding', 'Contribution Requested', 'Grant Amount', 'Requested Contribution'. Return as a plain number with no currency symbols, commas, or units (e.g. 150000 not $150,000).",
+      "type": "number",
+      "required": true,
+      "confidence_default": 0.95,
+      "cross_check": false,
+      "cross_check_budget": true
+    },
+    {
+      "field_id": "DF-06",
+      "name": "Matching / Non-Programme Funding",
+      "description": "The total non-programme funding the applicant is contributing (matching or leverage funds).",
+      "extraction_prompt": "What is the total non-programme or matching funding amount the applicant is committing to this project? Look for labels like 'Matching Funds', 'Non-RDA Funding', 'Applicant Contribution', 'Other Funding', 'Leverage', 'Non-Government Funding'. Return as a plain number (no currency symbols or commas).",
+      "type": "number",
+      "required": false,
+      "confidence_default": 0.90,
+      "cross_check": false
+    },
+    {
+      "field_id": "DF-07",
+      "name": "Project Period",
+      "description": "The proposed start and end dates of the project.",
+      "extraction_prompt": "What are the proposed start date and end date of the project? Look for labels like 'Project Start', 'Start Date', 'Project End', 'End Date', 'Project Period', 'Term', 'Duration', 'Proposed Start'. Return as a JSON object with keys 'start_date' and 'end_date', both in YYYY-MM-DD format where possible.",
+      "type": "object",
+      "required": true,
+      "confidence_default": 0.95,
+      "cross_check": false
+    }
+  ]
+}

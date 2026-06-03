@@ -52,9 +52,12 @@ def _is_tech_commercialization(case: Case, scenario_folder: str) -> bool:
     return False
 
 
-def route_case(case: Case, scenario_folder: str = "") -> Case:
+def _route_case_legacy(case: Case, scenario_folder: str = "") -> Case:
     """
-    Determine the routing basket and update the case accordingly.
+    DEACTIVATED by default — retained as the no-key fallback.
+
+    Deterministic basket assignment from missing document count.
+    Runs only when no model key is configured (see route_case dispatcher).
 
     Basket logic:
       - missing_count == 0 → complete
@@ -100,6 +103,7 @@ def route_case(case: Case, scenario_folder: str = "") -> Case:
         event_type=EventType.basket_assigned,
         actor="system",
         details={
+            "engine": "rules-legacy",
             "basket": basket.value,
             "missing_count": missing_count,
             "missing_categories": missing_categories,
@@ -108,3 +112,116 @@ def route_case(case: Case, scenario_folder: str = "") -> Case:
     )
     case.audit_trail.append(audit)
     return case
+
+
+# ===========================================================================
+# MODEL / SKILL-BASED routing (default path when a key is configured)
+# ===========================================================================
+
+def _route_case_llm(case: Case, scenario_folder: str = "") -> Case:
+    """
+    Model-decided basket assignment guided by documents.json routing rules.
+
+    The model receives the LLM-produced completeness checklist and findings
+    and decides: complete / incomplete / decline_basket along with the list
+    of missing doc IDs.  Raises on failure so the dispatcher can fall back.
+    """
+    import json
+    from pathlib import Path
+    from intake import llm
+
+    docs_skill_file = Path(__file__).parent / "documents.json"
+    routing_rules: dict = {}
+    try:
+        with open(docs_skill_file, "r", encoding="utf-8") as fh:
+            routing_rules = json.load(fh).get("routing_rules", {})
+    except Exception:
+        pass
+
+    checklist_payload = [
+        {"doc_id": c.doc_id, "category": c.category, "status": c.status.value}
+        for c in case.checklist
+    ]
+    findings_payload = [
+        {"rule_id": f.rule_id, "severity": f.severity.value, "message": f.message}
+        for f in case.findings
+    ]
+
+    system_msg = (
+        "You are a precise case router for grant applications. "
+        "Decide the routing basket and identify missing documents. "
+        "Return only the specified JSON — no prose."
+    )
+    user_msg = (
+        "ROUTING RULES (authoritative — apply exactly):\n"
+        f"{json.dumps(routing_rules, indent=2)}\n\n"
+        "COMPLETENESS CHECKLIST:\n"
+        f"{json.dumps(checklist_payload, indent=2)}\n\n"
+        "FINDINGS FROM RULES EVALUATION:\n"
+        f"{json.dumps(findings_payload, indent=2)}\n\n"
+        "Return ONLY this JSON object:\n"
+        "{\n"
+        '  "basket": <"complete" | "incomplete" | "decline_basket">,\n'
+        '  "missing_count": <integer — number of missing/uncertain required docs>,\n'
+        '  "missing_categories": [<"DOC-0X", ...>],\n'
+        '  "reasoning": <one sentence explaining the basket decision>\n'
+        "}\n"
+        "Count DOC-08 as a gap ONLY if it appears in the checklist with status "
+        "'missing' or 'uncertain' (i.e. the project IS tech-commercialization)."
+    )
+
+    result = llm.chat_json(system_msg, user_msg, max_tokens=300)
+    if not result or "basket" not in result:
+        raise RuntimeError("LLM routing returned no usable result")
+
+    basket_map = {
+        "complete": Basket.complete,
+        "incomplete": Basket.incomplete,
+        "decline_basket": Basket.decline_basket,
+    }
+    basket = basket_map.get(str(result.get("basket")), Basket.incomplete)
+    missing_count = int(result.get("missing_count", 0))
+    missing_categories: List[str] = result.get("missing_categories", []) or []
+
+    # Validate the model's basket against its own stated missing_count.
+    # The routing thresholds are exact numerical rules; correct any contradiction.
+    if missing_count == 0:
+        basket = Basket.complete
+    elif missing_count <= 2:
+        basket = Basket.incomplete
+    else:
+        basket = Basket.decline_basket
+
+    case.basket = basket
+    case.missing_count = missing_count
+    case.missing_categories = missing_categories
+    case.status = "routed"
+
+    case.audit_trail.append(AuditEvent(
+        case_id=case.case_id,
+        timestamp=_now_iso(),
+        event_type=EventType.basket_assigned,
+        actor="system",
+        details={
+            "engine": "model",
+            "basket": basket.value,
+            "missing_count": missing_count,
+            "missing_categories": missing_categories,
+            "reasoning": result.get("reasoning", ""),
+        },
+    ))
+    return case
+
+
+def route_case(case: Case, scenario_folder: str = "") -> Case:
+    """
+    Dispatcher: model/skill-based routing when a key is configured,
+    otherwise the (dormant) legacy deterministic router as a safety net.
+    """
+    from intake import llm
+    if llm.gpt_available():
+        try:
+            return _route_case_llm(case, scenario_folder)
+        except Exception:
+            return _route_case_legacy(case, scenario_folder)
+    return _route_case_legacy(case, scenario_folder)

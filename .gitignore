@@ -9,6 +9,11 @@ env/
 dist/
 build/
 
+# Secrets / local env (NEVER commit API keys)
+.env
+.env.*
+*.env
+
 # Case store (runtime data)
 store/cases/*.json
 store/manager_queue.json

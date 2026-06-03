@@ -12,7 +12,9 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from models.schemas import (
     AuditEvent,
+    Basket,
     Case,
+    DocumentStatus,
     EligibilityFlag,
     EventType,
     ExtractedField,
@@ -174,9 +176,12 @@ def _read_total_project_costs_from_budget(filepath: str) -> Optional[float]:
 # Main entry point
 # ---------------------------------------------------------------------------
 
-def run_rules(case: Case, submission_folder: str) -> Case:
+def _run_rules_legacy(case: Case, submission_folder: str) -> Case:
     """
-    Evaluate R-001 through R-012. Append findings and eligibility flags to case.
+    DEACTIVATED by default — retained as the no-key fallback.
+
+    Deterministic evaluation of R-001 through R-012 plus ER-01..ER-09.
+    Runs only when no model key is configured (see run_rules dispatcher).
     """
     findings: List[Finding] = list(case.findings)  # preserve existing (e.g. R-002 from extractor)
     flags: List[EligibilityFlag] = []
@@ -251,6 +256,7 @@ def run_rules(case: Case, submission_folder: str) -> Case:
         event_type=EventType.rules_evaluated,
         actor="system",
         details={
+            "engine": "rules-legacy",
             "findings_count": len(deduped),
             "flags_count": len(flags),
             "rule_ids": list({f.rule_id for f in deduped}),
@@ -258,6 +264,164 @@ def run_rules(case: Case, submission_folder: str) -> Case:
     )
     case.audit_trail.append(audit)
     return case
+
+
+# ===========================================================================
+# MODEL / SKILL-BASED rules evaluation (default path when a key is configured)
+# ===========================================================================
+
+_RULES_SKILL_FILE = Path(__file__).parent / "rules.json"
+
+
+def _load_rule_skills() -> Dict:
+    try:
+        with open(_RULES_SKILL_FILE, "r", encoding="utf-8") as fh:
+            return json.load(fh)
+    except Exception:
+        return {}
+
+
+def _serialise_fields(fields: Dict[str, ExtractedField]) -> List[Dict]:
+    out: List[Dict] = []
+    for fid, f in fields.items():
+        out.append({
+            "field_id": f.field_id,
+            "name": f.name,
+            "value": f.value,
+            "confidence": f.confidence,
+            "source_doc_id": f.source_doc_id,
+            "evidence": f.raw_excerpt,
+        })
+    return out
+
+
+def _run_rules_llm(case: Case, submission_folder: str) -> Case:
+    """
+    Model/skill-based rule evaluation guided by rules.json.
+
+    One model call receives the extracted fields, the completeness checklist,
+    the document texts, and the submission date, then applies every rule
+    definition to produce findings + eligibility flags.  Raises on failure so
+    the dispatcher can fall back to the dormant legacy engine.
+    """
+    from intake import llm
+    from intake.extractor import _build_document_bundle
+
+    rule_skills = _load_rule_skills()
+
+    # Submission date
+    try:
+        sub_date = _parse_date(case.submission_timestamp) or date.today()
+    except Exception:
+        sub_date = date.today()
+
+    # Completeness snapshot
+    checklist = [
+        {"doc_id": c.doc_id, "category": c.category, "status": c.status.value}
+        for c in case.checklist
+    ]
+    tech_comm = any(
+        c.doc_id == "DOC-08" and c.status != DocumentStatus.not_applicable
+        for c in case.checklist
+    ) if any(c.doc_id == "DOC-08" for c in case.checklist) else False
+
+    # Document texts (capped) for content-dependent rules (R-002/003/007/010, ER-04)
+    bundle = _build_document_bundle(case, submission_folder)
+    docs_text = "\n\n".join(
+        f"=== {b['doc_type']}: {b['label']} [{b['filename']}] ===\n{b['text'][:3000]}"
+        for b in bundle
+    )
+
+    system_msg = (
+        "You are a meticulous grant-eligibility officer. Apply every rule "
+        "definition exactly as written, using the provided data. Do not invent "
+        "rules. Return only the specified JSON object."
+    )
+    user_msg = (
+        "RULE DEFINITIONS (apply each precisely; thresholds are authoritative):\n"
+        f"{json.dumps(rule_skills, indent=2)}\n\n"
+        f"SUBMISSION DATE: {sub_date.isoformat()}\n"
+        f"TECHNOLOGY_COMMERCIALIZATION: {tech_comm}\n\n"
+        "EXTRACTED FIELDS:\n"
+        f"{json.dumps(_serialise_fields(case.extracted_fields), indent=2, default=str)}\n\n"
+        "COMPLETENESS CHECKLIST:\n"
+        f"{json.dumps(checklist, indent=2)}\n\n"
+        "DOCUMENT TEXTS:\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"{docs_text}\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "Return ONLY this JSON object:\n"
+        "{\n"
+        '  "findings": [ {"rule_id": <"R-0XX">, "severity": <"error"|"warning"|"info"|"manual_review">, "message": <str>} ],\n'
+        '  "eligibility_flags": [ {"flag_id": <"ER-0X">, "label": <str>, "status": <"ok"|"needs_review"|"flagged">, "detail": <str>} ]\n'
+        "}\n"
+        "CRITICAL EMISSION RULE: Emit a finding ONLY when a rule's FAILURE or ATTENTION "
+        "condition is triggered. Do NOT emit any finding when a rule passes cleanly — "
+        "silence means the rule passed. "
+        "The ONLY exception is R-002: always emit exactly one R-002 finding (warning / "
+        "manual_review / info) to record the name-check outcome. "
+        "All other rules (R-003 through R-012): zero findings if no issue detected. "
+        "Produce all nine ER flags."
+    )
+
+    result = llm.chat_json(system_msg, user_msg, max_tokens=2500)
+    if not result or "findings" not in result:
+        raise RuntimeError("LLM rules evaluation returned no usable result")
+
+    sev_map = {
+        "error": Severity.error,
+        "warning": Severity.warning,
+        "info": Severity.info,
+        "manual_review": Severity.manual_review,
+    }
+    findings: List[Finding] = []
+    for item in result.get("findings", []):
+        sev = sev_map.get(str(item.get("severity")), Severity.info)
+        findings.append(Finding(
+            rule_id=str(item.get("rule_id", "R-000")),
+            severity=sev,
+            message=str(item.get("message", "")),
+        ))
+
+    flags: List[EligibilityFlag] = []
+    for item in result.get("eligibility_flags", []):
+        flags.append(EligibilityFlag(
+            flag_id=str(item.get("flag_id", "ER-00")),
+            label=str(item.get("label", "")),
+            status=str(item.get("status", "needs_review")),
+            detail=str(item.get("detail", "")),
+        ))
+
+    case.findings = findings
+    case.eligibility_flags = flags
+
+    case.audit_trail.append(AuditEvent(
+        case_id=case.case_id,
+        timestamp=_now_iso(),
+        event_type=EventType.rules_evaluated,
+        actor="system",
+        details={
+            "engine": "model",
+            "findings_count": len(findings),
+            "flags_count": len(flags),
+            "rule_ids": list({f.rule_id for f in findings}),
+        },
+    ))
+    return case
+
+
+def run_rules(case: Case, submission_folder: str) -> Case:
+    """
+    Dispatcher: model/skill-based evaluation when a key is configured,
+    otherwise the (dormant) legacy deterministic engine as a safety net.
+    """
+    from intake import llm
+    if llm.gpt_available():
+        try:
+            return _run_rules_llm(case, submission_folder)
+        except Exception:
+            return _run_rules_legacy(case, submission_folder)
+    return _run_rules_legacy(case, submission_folder)
 
 
 # ---------------------------------------------------------------------------

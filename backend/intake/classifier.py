@@ -241,16 +241,12 @@ def _build_checklist(
     return checklist
 
 
-def classify_documents(case: Case, scenario_folder: str) -> Case:
+def _classify_documents_legacy(case: Case, scenario_folder: str) -> Case:
     """
-    Classify each DocumentRecord and build the checklist.
+    DEACTIVATED by default — retained as the no-key fallback.
 
-    Args:
-        case:            Current Case (with documents populated by ingestion).
-        scenario_folder: Absolute path to the submission folder.
-
-    Returns:
-        Updated Case with documents classified and checklist built.
+    Deterministic filename/content classification. Runs only when no model key
+    is configured (see classify_documents dispatcher below).
     """
     already_assigned: dict[str, list[DocumentRecord]] = {}
     classified: list[DocumentRecord] = []
@@ -283,6 +279,7 @@ def classify_documents(case: Case, scenario_folder: str) -> Case:
         event_type=EventType.classification_completed,
         actor="system",
         details={
+            "engine": "rules-legacy",
             "classified_count": sum(1 for d in classified if d.detected_doc_type),
             "unclassified_count": sum(1 for d in classified if not d.detected_doc_type),
             "tech_commercialization": tech_comm,
@@ -304,3 +301,153 @@ def _is_tech_commercialization(case: Case, scenario_folder: str) -> bool:
         except Exception:
             pass
     return False
+
+
+# ===========================================================================
+# MODEL / SKILL-BASED classification (default path when a key is configured)
+# ===========================================================================
+
+_DOCS_SKILL_FILE = Path(__file__).parent / "documents.json"
+
+
+def _load_doc_skills() -> dict:
+    try:
+        with open(_DOCS_SKILL_FILE, "r", encoding="utf-8") as fh:
+            return json.load(fh)
+    except Exception:
+        return {}
+
+
+def _classify_documents_llm(case: Case, scenario_folder: str) -> Case:
+    """
+    Model/skill-based classification + completeness.
+
+    The model reads every uploaded file (filename + content) and, guided by
+    documents.json, assigns each to a DOC-type and produces the completeness
+    checklist (present / uncertain / missing / not_applicable) directly — no
+    deterministic filename rules.  Raises on failure so the dispatcher can
+    fall back to the dormant legacy classifier.
+    """
+    from intake import llm
+    from intake.extractor import _read_document_text  # universal reader
+
+    skills = _load_doc_skills()
+    doc_types = skills.get("doc_types", [])
+
+    folder = Path(scenario_folder)
+    files_payload = []
+    per_file_cap = 3_000
+    for record in case.documents:
+        path = folder / record.name
+        text = _read_document_text(str(path)) if path.exists() else ""
+        files_payload.append({
+            "filename": record.name,
+            "extension": record.extension,
+            "content_preview": text[:per_file_cap],
+        })
+
+    system_msg = (
+        "You are a precise intake classifier for formal application packages. "
+        "Assign each uploaded file to the correct document type and assess "
+        "package completeness. Return only the specified JSON — no prose."
+    )
+    user_msg = (
+        "DOCUMENT TYPE DEFINITIONS (the only domain knowledge):\n"
+        f"{json.dumps(doc_types, indent=2)}\n\n"
+        "COMPLETENESS RULES:\n"
+        f"{json.dumps(skills.get('completeness_rules', {}), indent=2)}\n\n"
+        "UPLOADED FILES:\n"
+        f"{json.dumps(files_payload, indent=2)}\n\n"
+        "Return ONLY this JSON object:\n"
+        "{\n"
+        '  "tech_commercialization": <bool — from the application form project.technology_commercialization>,\n'
+        '  "files": [ {"filename": <str>, "doc_id": <"DOC-0X" or null>, "confidence": <0..1>, "notes": <str or null>} ],\n'
+        '  "checklist": [ {"doc_id": <"DOC-0X">, "category": <str>, "status": <"present"|"uncertain"|"missing"|"not_applicable">, "matched_files": [<str>], "confidence": <0..1>, "notes": <str or null>} ]\n'
+        "}\n"
+        "Include a checklist entry for every defined doc type (DOC-01..DOC-08). "
+        "DOC-08 must be 'not_applicable' when tech_commercialization is false."
+    )
+
+    result = llm.chat_json(system_msg, user_msg, max_tokens=2000)
+    if not result or "files" not in result or "checklist" not in result:
+        raise RuntimeError("LLM classification returned no usable result")
+
+    by_name = {f.get("filename"): f for f in result.get("files", [])}
+    classified: list[DocumentRecord] = []
+    for record in case.documents:
+        info = by_name.get(record.name, {})
+        doc_id = info.get("doc_id")
+        conf = float(info.get("confidence", 0.0) or 0.0)
+        classified.append(record.model_copy(update={
+            "detected_doc_type": doc_id,
+            "confidence": conf,
+            "matched_on": "model",
+            "parse_status": "parsed" if doc_id else "unclassified",
+            "notes": info.get("notes"),
+        }))
+    case.documents = classified
+
+    tech_comm = bool(result.get("tech_commercialization", False))
+
+    cat_labels = {d["doc_id"]: d["category"] for d in doc_types}
+    status_map = {
+        "present": DocumentStatus.present,
+        "uncertain": DocumentStatus.uncertain,
+        "missing": DocumentStatus.missing,
+        "not_applicable": DocumentStatus.not_applicable,
+    }
+    checklist: list[ChecklistItem] = []
+    seen_ids: set[str] = set()
+    for item in result.get("checklist", []):
+        doc_id = item.get("doc_id")
+        if not doc_id or doc_id in seen_ids:
+            continue
+        seen_ids.add(doc_id)
+        checklist.append(ChecklistItem(
+            doc_id=doc_id,
+            category=item.get("category") or cat_labels.get(doc_id, doc_id),
+            status=status_map.get(str(item.get("status")), DocumentStatus.missing),
+            matched_files=item.get("matched_files", []) or [],
+            confidence=float(item.get("confidence", 0.0) or 0.0),
+            notes=item.get("notes"),
+        ))
+    for d in doc_types:
+        if d["doc_id"] not in seen_ids:
+            default_status = (
+                DocumentStatus.not_applicable
+                if d["doc_id"] == "DOC-08" and not tech_comm
+                else DocumentStatus.missing
+            )
+            checklist.append(ChecklistItem(
+                doc_id=d["doc_id"], category=d["category"],
+                status=default_status, matched_files=[], confidence=0.0,
+            ))
+    case.checklist = checklist
+
+    case.audit_trail.append(AuditEvent(
+        case_id=case.case_id,
+        timestamp=_now_iso(),
+        event_type=EventType.classification_completed,
+        actor="system",
+        details={
+            "engine": "model",
+            "classified_count": sum(1 for d in classified if d.detected_doc_type),
+            "unclassified_count": sum(1 for d in classified if not d.detected_doc_type),
+            "tech_commercialization": tech_comm,
+        },
+    ))
+    return case
+
+
+def classify_documents(case: Case, scenario_folder: str) -> Case:
+    """
+    Dispatcher: model/skill-based classification when a key is configured,
+    otherwise the (dormant) legacy deterministic classifier as a safety net.
+    """
+    from intake import llm
+    if llm.gpt_available():
+        try:
+            return _classify_documents_llm(case, scenario_folder)
+        except Exception:
+            return _classify_documents_legacy(case, scenario_folder)
+    return _classify_documents_legacy(case, scenario_folder)

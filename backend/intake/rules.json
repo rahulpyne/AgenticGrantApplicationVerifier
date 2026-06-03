@@ -1,0 +1,100 @@
+{
+  "version": "1.0",
+  "description": "Eligibility-rule definitions for model/skill-based evaluation. This is the ONLY domain knowledge for rule findings + eligibility flags. Edit thresholds or prompts here to change eligibility logic — no code changes required. Severities: error | warning | info | manual_review.",
+
+  "findings": [
+    {
+      "rule_id": "R-002",
+      "label": "Legal name cross-document consistency",
+      "severity_if_mismatch": "warning",
+      "severity_if_unreadable": "manual_review",
+      "severity_if_no_cross_docs": "info",
+      "instruction": "STEP 1 — Check DF-01's evidence field first: if it contains the substring '⚠ CROSS-CHECK MISMATCH', a name mismatch has already been confirmed by the extraction stage. In that case emit a 'warning' finding for R-002 stating the mismatch (copy the mismatch detail from the evidence string). STEP 2 — If the evidence field contains '✓ cross-checked', names are consistent; emit an 'info' finding confirming this. STEP 3 — Only if the evidence field contains neither mismatch nor cross-check signals, compare DF-01 value against any name visible in DOC-07 and DOC-04 document texts. If names differ emit 'warning'; if a document is present but name unreadable emit 'manual_review'; if neither DOC-07 nor DOC-04 was submitted emit 'info' that check was skipped. Emit at most one finding per document."
+    },
+    {
+      "rule_id": "R-003",
+      "label": "Budget worksheet total mismatch",
+      "severity": "warning",
+      "instruction": "This rule MUST fire (emit a 'warning') when budget totals are inconsistent. In the DOC-04 (Budget Worksheet) document text, find the rows labelled 'Total Project Costs (Current)' and 'Total Project Costs (Application)'. Extract the numeric values from each row. If the two values differ by more than $0.01, this is a REQUIRED ATTENTION condition — emit a 'warning' stating both amounts and the difference. Also check if the application form's total project costs (from the extracted fields or DOC-01 text) differs from the worksheet total — if so, emit a separate 'warning'. Skip entirely only if DOC-04 is absent from the checklist."
+    },
+    {
+      "rule_id": "R-004",
+      "label": "Project period within eligible window",
+      "severity": "warning",
+      "eligible_window": {"start": "2026-04-01", "end": "2028-03-31"},
+      "instruction": "From DF-07 (project period start_date and end_date): compare each date against the eligible window 2026-04-01 to 2028-03-31. If start_date is before 2026-04-01, this IS an ATTENTION condition — emit a 'warning' stating the start date and the eligible window start. If end_date is after 2028-03-31, this IS an ATTENTION condition — emit a 'warning' stating the end date and the eligible window end. Emit no finding if both dates are within the window."
+    },
+    {
+      "rule_id": "R-005",
+      "label": "PacifiCan funding share cap",
+      "severity": "warning",
+      "max_share": 0.75,
+      "instruction": "Compute PacifiCan share = DF-05 (requested amount) / total project costs. Total = DOC-04 worksheet total if available, else DF-05 + DF-06 (matching funding). If share > 0.75, emit a 'warning' stating the percentage."
+    },
+    {
+      "rule_id": "R-006",
+      "label": "Requested amount within range",
+      "severity": "warning",
+      "min": 100000,
+      "max": 10000000,
+      "instruction": "From DF-05 (requested amount): if below $100,000 emit a 'warning' (below minimum); if above $10,000,000 emit a 'warning' (exceeds maximum)."
+    },
+    {
+      "rule_id": "R-007",
+      "label": "Technology Readiness Level",
+      "severity": "warning",
+      "min_trl": 5,
+      "instruction": "ONLY when the project is technology-commercialization. Determine the TRL from the application form or the technology questionnaire (DOC-08) text. If TRL is not declared, emit a 'warning' (TRL not declared). If TRL < 5, emit a 'warning'. Skip entirely for non-tech projects."
+    },
+    {
+      "rule_id": "R-008",
+      "label": "Technology Questionnaire required",
+      "severity": "error",
+      "instruction": "ONLY when the project is technology-commercialization. If DOC-08 is not present (status missing/uncertain), emit an 'error' that the Technology Questionnaire is required but missing. Skip for non-tech projects."
+    },
+    {
+      "rule_id": "R-009",
+      "label": "Low extraction confidence",
+      "severity": "manual_review",
+      "confidence_threshold": 0.60,
+      "instruction": "Scan EVERY field in the extracted fields list. For EACH field whose confidence value is strictly below 0.60, this IS a REQUIRED ATTENTION condition — emit one 'manual_review' finding per field. If the field value is null, say the field could not be extracted and manual entry is required. If the field has a value but confidence < 0.60, state the field name and the exact confidence percentage. Do not skip any field below the 0.60 threshold."
+    },
+    {
+      "rule_id": "R-010",
+      "label": "Funding confirmation is forecast, not confirmed",
+      "severity": "warning",
+      "forecast_terms": ["forecast", "projection", "anticipated", "expected revenue", "pro forma"],
+      "confirmed_terms": ["awarded", "confirmed", "signed", "letter of agreement"],
+      "instruction": "This rule MUST fire (emit a 'warning') when DOC-06 content contains forecast/projection language without confirmed-funding language — this is a required ATTENTION condition, not a pass. Check the document bundle for the section labelled 'DOC-06: Funding Confirmation Letter'. If that text contains ANY of these words: forecast, projection, anticipated, 'expected revenue', 'pro forma' — AND contains NONE of: awarded, confirmed, signed, 'letter of agreement' — emit a 'warning' identifying the specific forecast terms found. If DOC-06 is absent from the checklist (status=missing), skip this rule entirely. If DOC-06 is present and contains ONLY confirmed-funding language, emit no finding."
+    },
+    {
+      "rule_id": "R-011",
+      "label": "BC operating facilities",
+      "severity": "info",
+      "instruction": "From DF-04: if bc_operating_facilities is explicitly false, emit an 'info' that no BC operating facility is declared and BC nexus should be confirmed."
+    },
+    {
+      "rule_id": "R-012",
+      "label": "Operating history (2+ years)",
+      "severity": "info",
+      "min_years": 2,
+      "instruction": "From the incorporation/establishment date (DF-03): if the organisation was established less than 2 years before the submission date, emit an 'info' that the operating-history requirement may not be met."
+    }
+  ],
+
+  "eligibility_flags": {
+    "status_values": ["ok", "needs_review", "flagged"],
+    "instruction": "Produce EXACTLY these nine flags, each with status and a short detail string.",
+    "flags": [
+      {"flag_id": "ER-01", "label": "Recipient Type", "rule": "ok if corporate status indicates a for-profit corporation (for-profit/corporation/inc/ltd); needs_review if status missing or unclear."},
+      {"flag_id": "ER-02", "label": "Operating History (2+ years)", "rule": "ok if established 2+ years before submission; flagged if less than 2 years; needs_review if establishment date unknown."},
+      {"flag_id": "ER-03", "label": "BC Presence", "rule": "ok if a BC operating facility is declared (DF-04 bc_operating_facilities true); flagged if false; needs_review if unknown."},
+      {"flag_id": "ER-04", "label": "Defence Supply Chain", "rule": "ok if defence supply-chain keywords (defence/defense/military/dnd/nato/supply chain) appear in the project description or supplemental form (DOC-07); else needs_review."},
+      {"flag_id": "ER-05", "label": "Defence Capability", "rule": "always needs_review — officer must assess defence-capability alignment."},
+      {"flag_id": "ER-06", "label": "Project Period", "rule": "ok if DF-07 within 2026-04-01 to 2028-03-31; flagged with the specific issue otherwise."},
+      {"flag_id": "ER-07", "label": "Technology Readiness Level", "rule": "ok and 'not applicable' for non-tech projects; for tech projects: ok if TRL>=5, flagged if TRL<5, needs_review if TRL not declared."},
+      {"flag_id": "ER-08", "label": "Funding Range", "rule": "ok if DF-05 within $100K–$10M; flagged if outside."},
+      {"flag_id": "ER-09", "label": "PacifiCan Share ≤ 75%", "rule": "ok if DF-05/(DF-05+DF-06) <= 0.75; flagged if over. Include the percentage in detail."}
+    ]
+  }
+}

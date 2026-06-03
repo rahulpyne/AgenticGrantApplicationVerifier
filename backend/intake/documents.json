@@ -1,0 +1,75 @@
+{
+  "version": "1.0",
+  "description": "Document-type definitions for model/skill-based completeness checking. This is the ONLY domain knowledge for classification + completeness. Edit or swap this file to change what documents are expected — no code changes required.",
+
+  "doc_types": [
+    {
+      "doc_id": "DOC-01",
+      "category": "Application Form (JSON)",
+      "required": true,
+      "identify": "The primary application form. Almost always a .json file containing applicant/organization details, project, and funding fields (often includes a 'case_id' or 'organization' key). Treat any structured application data file as DOC-01."
+    },
+    {
+      "doc_id": "DOC-02",
+      "category": "Annual Financial Statements",
+      "required": true,
+      "identify": "Year-end / annual financial statements (balance sheet, income statement). Filenames often contain 'financial statements', 'annual', 'year-end', or a year. NOT the interim statements."
+    },
+    {
+      "doc_id": "DOC-03",
+      "category": "Interim Financial Statements",
+      "required": true,
+      "identify": "Interim / in-year financial statements covering a partial period. Filenames usually contain 'interim'. Must be distinguished from DOC-02 annual statements."
+    },
+    {
+      "doc_id": "DOC-04",
+      "category": "Budget Worksheet (XLSX)",
+      "required": true,
+      "identify": "Budget / cost-detail worksheet, typically an .xlsx workbook with a 'Cost Detail' sheet and project cost totals. Filenames often contain 'budget'."
+    },
+    {
+      "doc_id": "DOC-05",
+      "category": "Business Plan / Pitch Deck",
+      "required": true,
+      "identify": "Business plan, strategic plan, or pitch deck describing the company and project. Filenames often contain 'business plan' or 'pitch'."
+    },
+    {
+      "doc_id": "DOC-06",
+      "category": "Funding Confirmation Letter",
+      "required": true,
+      "identify": "Any letter or document that relates to matching, non-programme, or non-RDA funding — even if the content uses forecast or projection language rather than confirmed language. Classify on file PURPOSE (is this about funding? does the filename include 'funding', 'confirmation', 'letter'?), NOT on content quality. The quality of the funding confirmation is evaluated by the rules engine (R-010), not the classifier. Filenames often contain 'funding_confirmation', 'funding confirmation', or 'confirmation'."
+    },
+    {
+      "doc_id": "DOC-07",
+      "category": "Mandatory Supplemental Form",
+      "required": true,
+      "identify": "The mandatory supplemental application form. Filenames often contain 'supplemental'. Usually restates the legal name and project details."
+    },
+    {
+      "doc_id": "DOC-08",
+      "category": "Technology Questionnaire",
+      "required": "conditional",
+      "required_when": "Only required when the application is a technology-commercialization project (application_form.json project.technology_commercialization = true). Otherwise NOT applicable.",
+      "identify": "A technology readiness / commercialization questionnaire. Filenames often contain 'technology questionnaire', 'tech q', or 'techq'."
+    }
+  ],
+
+  "completeness_rules": {
+    "status_values": ["present", "uncertain", "missing", "not_applicable"],
+    "uncertain_definition": "A file plausibly matches a required doc type but you are not confident (e.g. ambiguous duplicate financial statements, or a poorly-named file). Mark status 'uncertain' rather than guessing 'present'.",
+    "duplicate_handling": "If two different files both look like the same required doc type (e.g. two annual financial statements for different years), classify the best one 'present' and mark the doc type 'uncertain' only if you genuinely cannot tell which is authoritative.",
+    "not_applicable": "DOC-08 is 'not_applicable' for non-technology-commercialization projects.",
+    "missing": "A required doc type with no matching file is 'missing'."
+  },
+
+  "routing_rules": {
+    "description": "Basket assignment from the completeness checklist. A doc type counts as a GAP if its status is 'missing' OR 'uncertain'. DOC-08 only counts when the project is technology-commercialization.",
+    "threshold_table": "GAP COUNT → BASKET (EXACT, NO EXCEPTIONS): 0 → complete | 1 → incomplete | 2 → incomplete | 3 → decline_basket | 4 → decline_basket | 5+ → decline_basket",
+    "important": "1 gap AND 2 gaps BOTH map to 'incomplete'. Only 3 OR MORE gaps map to 'decline_basket'. Never return 'decline_basket' for 2 or fewer gaps.",
+    "baskets": [
+      {"basket": "complete", "when": "gap_count == 0"},
+      {"basket": "incomplete", "when": "gap_count == 1 OR gap_count == 2"},
+      {"basket": "decline_basket", "when": "gap_count >= 3"}
+    ]
+  }
+}
