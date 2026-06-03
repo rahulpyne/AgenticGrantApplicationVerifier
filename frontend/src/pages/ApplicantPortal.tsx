@@ -80,11 +80,6 @@ export default function ApplicantPortal() {
   const [touched, setTouched] = useState<Record<string, boolean>>({});
   const touch = (field: string) => setTouched(p => ({ ...p, [field]: true }));
 
-  const craError    = touched.cra     ? validateCra(craNumber) : null;
-  const amtError    = touched.amount  ? validateAmount(requestedAmount, 100_000, 10_000_000, "Requested PacifiCan Amount") : null;
-  const dateError   = touched.dates   ? validateDates(projectStart, projectEnd) : null;
-  const nameError   = touched.name && !applicantName.trim() ? "Applicant name is required" : null;
-
   // Soft range warning (not blocking) for matching funds
   const matchingWarn = matchingAmount && requestedAmount
     ? (() => {
@@ -146,9 +141,17 @@ export default function ApplicantPortal() {
   // True when the user has uploaded their own application_form.json — form fields are bypassed
   const hasAppFormJson = files.some((f) => f.name === "application_form.json");
 
+  // Inline validation — suppressed entirely when application_form.json is uploaded
+  const craError  = (!hasAppFormJson && touched.cra)    ? validateCra(craNumber) : null;
+  const amtError  = (!hasAppFormJson && touched.amount) ? validateAmount(requestedAmount, 100_000, 10_000_000, "Requested PacifiCan Amount") : null;
+  const dateError = (!hasAppFormJson && touched.dates)  ? validateDates(projectStart, projectEnd) : null;
+  const nameError = (!hasAppFormJson && touched.name && !applicantName.trim()) ? "Applicant name is required" : null;
+
   const handleSubmit = async () => {
-    // Touch all fields to surface validation errors
-    setTouched({ name: true, cra: true, amount: true, dates: true });
+    // Touch all fields to surface inline validation errors — only when fields are active
+    if (!hasAppFormJson) {
+      setTouched({ name: true, cra: true, amount: true, dates: true });
+    }
 
     if (!hasAppFormJson) {
       if (!applicantName.trim()) { setError("Applicant name is required."); return; }
